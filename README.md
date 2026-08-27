@@ -1,8 +1,8 @@
 # ke-agent
 
-`ke` 是一个计划从零实现的本地 coding agent harness。本仓库当前只完成教程的阶段一：工程骨架。
+`ke` 是一个计划从零实现的本地 coding agent harness。本仓库当前完成到教程阶段二：核心消息类型、响应解析、LLM 协议和 FakeLLM。
 
-当前阶段提供可安装的 Python 包、`ke` 命令入口、示例配置和基础项目约定。尚未实现 Agent Loop、Tools、Context、TUI 或 Server。
+当前阶段提供可安装的 Python 包、`ke` 命令入口、示例配置，以及不依赖具体模型 SDK 的消息与响应边界。尚未实现真实 LLM 网络请求、Agent Loop、Tools、Context、TUI 或 Server。
 
 ## 环境要求
 
@@ -62,7 +62,12 @@ ke --help
     └── ke/
         ├── __init__.py
         ├── __main__.py
-        └── cli.py
+        ├── cli.py
+        └── llm/
+            ├── types.py
+            ├── protocol.py
+            ├── parse.py
+            └── fake_llm.py
 ```
 
-后续能力会严格按照教程分阶段加入，本阶段不包含任何真实模型调用或本地工具执行。
+后续能力会严格按照教程分阶段加入，本阶段不包含任何真实模型调用或本地工具执行。阶段二测试全部使用 FakeLLM，不读取 `.env`，也不访问网络。

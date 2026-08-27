@@ -8,7 +8,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ke",
         description="ke：一个自研的本地编程智能体缰绳。",
-        epilog="当前为阶段一工程骨架，后续阶段将逐步加入 agent 能力。",
+        epilog="当前完成到阶段二，尚未接入真实模型或 agent loop。",
     )
     parser.add_argument(
         "--version",
