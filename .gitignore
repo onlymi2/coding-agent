@@ -33,3 +33,5 @@ dist/
 .vscode/
 .DS_Store
 Thumbs.db
+
+.tmp_pytest/
