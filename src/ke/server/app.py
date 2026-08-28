@@ -3,11 +3,12 @@ import threading
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from importlib.resources import files
 from typing import Any
 
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, StreamingResponse
+from starlette.responses import HTMLResponse, JSONResponse, StreamingResponse
 from starlette.routing import Route
 
 from ke.agent.context import AgentContext
@@ -29,6 +30,12 @@ from ke.tools.types import ToolResult
 
 LlmFactory = Callable[[], LlmClient]
 RegistryFactory = Callable[[WorkspaceSandbox], ToolRegistry]
+
+
+def load_static_html() -> str:
+    """Load the packaged Web client without initializing runtime services."""
+
+    return files("ke.server").joinpath("static.html").read_text(encoding="utf-8")
 
 
 def _tool_call_json(call: ToolCall) -> dict[str, Any]:
@@ -311,7 +318,7 @@ def create_app(
     registry_factory: RegistryFactory | None = None,
     auto_approve: bool = False,
 ) -> Starlette:
-    """Create the six-route local server without loading env or opening sockets."""
+    """Create six business APIs plus the packaged Web page."""
 
     runtime = SessionRuntime(
         config,
@@ -323,6 +330,9 @@ def create_app(
 
     async def health(request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok"})
+
+    async def web_page(request: Request) -> HTMLResponse:
+        return HTMLResponse(load_static_html())
 
     async def create_session(request: Request) -> JSONResponse:
         try:
@@ -389,6 +399,7 @@ def create_app(
 
     app = Starlette(
         routes=[
+            Route("/", web_page, methods=["GET"]),
             Route("/health", health, methods=["GET"]),
             Route("/session", create_session, methods=["POST"]),
             Route("/session/{id}/message", post_message, methods=["POST"]),

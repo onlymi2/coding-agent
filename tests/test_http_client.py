@@ -54,8 +54,10 @@ def test_send_message_requires_202() -> None:
         lambda request: httpx.Response(409, json={"error": "busy"})
     )
     with KeHttpClient("http://test", transport=transport) as client:
-        with pytest.raises(HttpClientError, match="409"):
+        with pytest.raises(HttpClientError, match="409") as exc_info:
             client.send_message("session", "task")
+
+    assert exc_info.value.status_code == 409
 
 
 def test_parse_sse_ignores_keep_alive_and_parses_json() -> None:

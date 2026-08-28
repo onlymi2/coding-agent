@@ -1,8 +1,8 @@
 # ke-agent
 
-`ke` 是一个计划从零实现的本地 coding agent harness。本仓库当前完成到阶段十：Textual 终端 TUI。
+`ke` 是一个计划从零实现的本地 coding agent harness。本仓库当前完成到阶段十一：内置单页 Web 客户端。
 
-当前阶段提供可安装的 Python 包、六个本地工具、事件驱动 Agent Loop、三级上下文压缩、OpenAI 兼容客户端和六接口 HTTP/SSE Server。裸 `ke` 会启动 Textual 交互终端；`ke serve` 只启动常驻服务；`ke run` 启动临时 loopback Server，再通过 HTTP/SSE 完成一次 headless 任务。`write_file`、`edit_file` 和 `bash` 默认需要确认，`--yes` 会在 Server 权限策略层自动批准。尚未实现静态网页或持久化 session。
+当前阶段提供可安装的 Python 包、六个本地工具、事件驱动 Agent Loop、三级上下文压缩、OpenAI 兼容客户端，以及带内置 Web 页面的本地 HTTP/SSE Server。裸 `ke` 会启动 Textual 交互终端；`ke serve` 只启动常驻服务；`ke run` 启动临时 loopback Server，再通过 HTTP/SSE 完成一次 headless 任务。TUI、Web 和 headless run 都是同一 Server Runtime 的薄客户端。
 
 ## 环境要求
 
@@ -62,7 +62,11 @@ ke run --yes "创建一个 hello.py 并运行验证"
 ke run --yes --workspace examples/demo "写一个计算器"
 ```
 
-裸 `ke` 启动 Textual 交互终端，并通过内嵌 Server 的 HTTP/SSE 接口工作。`ke serve` 只启动 HTTP/SSE 服务，默认监听 `127.0.0.1:8765`。普通 `ke run` 是一次性 headless 客户端，遇到写文件、编辑文件或执行命令时询问 `y/N`，默认拒绝；`ke run --yes` 让内嵌 Server 使用 `auto_approve=True`。一次性 run 使用动态 loopback 端口，结束或 Ctrl+C 后关闭内嵌 Server。
+裸 `ke` 启动 Textual 交互终端，并通过内嵌 Server 的 HTTP/SSE 接口工作。TUI 日志会显示一个可复制的 `WEB http://127.0.0.1:<port>/?session=<id>` 地址；在浏览器打开它会 attach 到同一个 session，两端观察同一串 Agent 事件。
+
+`ke serve` 只启动 HTTP/SSE 服务，默认监听 `127.0.0.1:8765`。浏览器访问 `http://127.0.0.1:8765/` 时，Web 客户端会创建自己的 session；访问 `http://127.0.0.1:8765/?session=<id>` 时则 attach 已有 session。网页只使用现有 HTTP API 和 SSE，不直接访问模型、工具或文件系统。
+
+普通 `ke run` 是一次性 headless 客户端，遇到写文件、编辑文件或执行命令时询问 `y/N`，默认拒绝；`ke run --yes` 让内嵌 Server 使用 `auto_approve=True`。一次性 run 使用动态 loopback 端口，结束或 Ctrl+C 后关闭内嵌 Server。
 
 ## 当前结构
 
@@ -95,6 +99,7 @@ ke run --yes --workspace examples/demo "写一个计算器"
         ├── server/
         │   ├── __init__.py
         │   ├── app.py
+        │   ├── static.html
         │   └── runtime.py
         ├── client/
         │   ├── __init__.py
@@ -109,4 +114,4 @@ ke run --yes --workspace examples/demo "写一个计算器"
             └── client.py
 ```
 
-后续能力会严格按照教程分阶段加入。配置优先级为显式覆盖、环境变量、`ke.yaml`、内置默认值；API Key 只允许来自环境变量。阶段十测试使用 Textual `run_test()`、Pilot、MockTransport、FakeLLM、fake embedded server 和 mock uvicorn，不读取真实 `.env`、不调用真实模型，也不访问网络。
+后续能力会严格按照教程分阶段加入。配置优先级为显式覆盖、环境变量、`ke.yaml`、内置默认值；API Key 只允许来自环境变量。阶段十一测试使用 Starlette TestClient、Textual `run_test()`、Pilot、MockTransport、FakeLLM、fake embedded server 和 mock uvicorn，不读取真实 `.env`、不调用真实模型，也不访问外部网络。

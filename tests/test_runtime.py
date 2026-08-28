@@ -161,7 +161,16 @@ def test_serve_uses_uvicorn_config_without_network_or_llm_call(
     runtime_module.serve(config, auto_approve=auto_approve)
 
     app = captured["app"]
-    assert len(app.routes) == 6
+    assert len(app.routes) == 7
+    assert {route.path for route in app.routes} == {
+        "/",
+        "/health",
+        "/session",
+        "/session/{id}/message",
+        "/session/{id}/events",
+        "/session/{id}/permissions/{pid}",
+        "/session/{id}/abort",
+    }
     assert app.state.runtime.auto_approve is auto_approve
     assert captured["host"] == "127.0.0.2"
     assert captured["port"] == 9012

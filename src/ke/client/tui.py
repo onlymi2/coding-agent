@@ -1,6 +1,7 @@
 import sys
 from collections.abc import Callable, Iterator
 from typing import Any, Protocol
+from urllib.parse import urlencode
 
 from starlette.applications import Starlette
 from textual.app import App, ComposeResult
@@ -9,7 +10,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Input, RichLog, Static
 
-from ke.client.http import KeHttpClient, SseEvent
+from ke.client.http import HttpClientError, KeHttpClient, SseEvent
 from ke.client.run import ServerLike, safe_tool_summary
 from ke.config import KeConfig
 from ke.server.runtime import EmbeddedServer, build_app
@@ -134,11 +135,16 @@ class KeTuiApp(App[int]):
         config: KeConfig,
         client: HttpClientLike,
         session_id: str,
+        web_url: str | None = None,
     ) -> None:
         super().__init__()
         self.config = config
         self.client = client
         self.session_id = session_id
+        self.web_url = web_url
+        self._web_base_url = (
+            web_url.partition("/?session=")[0] if web_url is not None else None
+        )
         self.last_event_id: int | None = None
         self.agent_status = "IDLE"
         self.status_history = ["IDLE"]
@@ -159,6 +165,8 @@ class KeTuiApp(App[int]):
         yield Footer()
 
     def on_mount(self) -> None:
+        if self.web_url is not None:
+            self._write(f"WEB {self.web_url}")
         self.query_one("#task-input", Input).focus()
 
     def _status_text(self) -> str:
@@ -271,6 +279,7 @@ class KeTuiApp(App[int]):
             self._set_status("ACT")
             self._write(f"ACT {safe_tool_summary(event.data)}")
         elif event.event == "tool_result":
+            self._close_pending_permission()
             self._set_status("OBSERVE")
             result = event.data.get("tool_result")
             content = result.get("content", "") if isinstance(result, dict) else ""
@@ -296,8 +305,13 @@ class KeTuiApp(App[int]):
 
     def _finish_task(self) -> None:
         self.task_running = False
-        self._pending_permission_id = None
+        self._close_pending_permission()
         self._set_input_enabled(True)
+
+    def _close_pending_permission(self) -> None:
+        self._pending_permission_id = None
+        if isinstance(self.screen, PermissionModal):
+            self.screen.dismiss(False)
 
     def _task_failed(
         self,
@@ -365,6 +379,26 @@ class KeTuiApp(App[int]):
                 permission_id,
                 allowed,
             )
+        except HttpClientError as exc:
+            if exc.status_code == 409:
+                self._call_ui(
+                    self._permission_handled_elsewhere,
+                    session_id,
+                    generation,
+                    permission_id,
+                )
+                return
+            try:
+                self.client.abort(session_id)
+            except Exception:
+                pass
+            self._call_ui(
+                self._permission_failed,
+                session_id,
+                generation,
+                type(exc).__name__,
+            )
+            return
         except Exception as exc:
             try:
                 self.client.abort(session_id)
@@ -403,6 +437,21 @@ class KeTuiApp(App[int]):
             self._set_status("ACT")
         self._write("权限：Allow" if allowed else "权限：Deny")
 
+    def _permission_handled_elsewhere(
+        self,
+        session_id: str,
+        generation: int,
+        permission_id: str,
+    ) -> None:
+        if session_id != self.session_id or generation != self._generation:
+            return
+        if permission_id != self._pending_permission_id:
+            return
+        self._pending_permission_id = None
+        if self.agent_status == "CONFIRM":
+            self._set_status("ACT")
+        self._write("权限已由其他客户端处理")
+
     def _permission_failed(
         self,
         session_id: str,
@@ -420,6 +469,8 @@ class KeTuiApp(App[int]):
         if command == "/help":
             for line in HELP_LINES:
                 self._write(line)
+            if self.web_url is not None:
+                self._write(f"WEB {self.web_url}")
         elif command == "/channel":
             names = sorted(set(self.config.channels) | {self.config.channel})
             for name in names:
@@ -497,9 +548,15 @@ class KeTuiApp(App[int]):
         self.session_id = session_id
         self._generation = generation
         self.last_event_id = None
+        if self._web_base_url is not None:
+            self.web_url = (
+                f"{self._web_base_url}/?{urlencode({'session': session_id})}"
+            )
         self._creating_session = False
         self._set_status("IDLE")
         self._write("已创建新会话")
+        if self.web_url is not None:
+            self._write(f"WEB {self.web_url}")
         self._set_input_enabled(True)
 
     def _new_session_failed(self, generation: int, error_type: str) -> None:
@@ -553,7 +610,16 @@ def run_tui(
         server.start()
         client = http_client_factory(server.base_url)
         session_id = client.create_session()
-        tui = tui_factory(config=config, client=client, session_id=session_id)
+        web_url = (
+            f"{server.base_url.rstrip('/')}/?"
+            f"{urlencode({'session': session_id})}"
+        )
+        tui = tui_factory(
+            config=config,
+            client=client,
+            session_id=session_id,
+            web_url=web_url,
+        )
         result = tui.run()
         exit_code = 0 if result is None else int(result)
     except KeyboardInterrupt:

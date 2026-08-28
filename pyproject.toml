@@ -25,3 +25,6 @@ ke = "ke.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"ke.server" = ["static.html"]

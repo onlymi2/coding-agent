@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from textual.widgets import Button, Input
 
-from ke.client.http import SseEvent
+from ke.client.http import HttpClientError, SseEvent
 from ke.client.tui import KeTuiApp, PermissionModal, run_tui
 from ke.config import ChannelConfig, KeConfig
 
@@ -138,6 +138,9 @@ def test_tui_starts_with_status_and_creates_runtime_session(tmp_path: Path) -> N
     assert lifecycle["stopped"] is True
     assert lifecycle["client"] is client
     assert lifecycle["session_id"] == "session-1"
+    assert lifecycle["web_url"] == (
+        "http://127.0.0.1:40000/?session=session-1"
+    )
     assert client.create_calls == 1
     assert client.closed
 
@@ -169,7 +172,13 @@ def test_tui_layout_and_server_events_render_safely(tmp_path: Path) -> None:
             ]
         ]
     )
-    app = KeTuiApp(make_config(tmp_path), client, "session-1")
+    web_url = "http://127.0.0.1:40000/?session=session-1"
+    app = KeTuiApp(
+        make_config(tmp_path),
+        client,
+        "session-1",
+        web_url=web_url,
+    )
 
     async def scenario() -> None:
         async with app.run_test() as pilot:
@@ -179,6 +188,7 @@ def test_tui_layout_and_server_events_render_safely(tmp_path: Path) -> None:
             await wait_until(pilot, lambda: not app.task_running, "final")
 
             rendered = "\n".join(app.event_lines)
+            assert f"WEB {web_url}" in rendered
             assert client.sent == [("session-1", "build file")]
             assert "THINK turn 1" in rendered
             assert "ACT write_file a.py" in rendered
@@ -264,8 +274,11 @@ def test_permission_modal_is_deny_by_default_and_resolves(
             await submit(app, pilot, "run tests")
             await wait_until(
                 pilot,
-                lambda: isinstance(app.screen, PermissionModal),
-                "permission modal",
+                lambda: (
+                    isinstance(app.screen, PermissionModal)
+                    and len(app.screen.query("#deny")) == 1
+                ),
+                "mounted permission modal",
             )
             modal = app.screen
             assert isinstance(modal, PermissionModal)
@@ -287,7 +300,12 @@ def test_permission_modal_is_deny_by_default_and_resolves(
 
 def test_help_channel_new_and_generation_guard(tmp_path: Path) -> None:
     client = FakeHttpClient(sessions=["session-2"])
-    app = KeTuiApp(make_config(tmp_path), client, "session-1")
+    app = KeTuiApp(
+        make_config(tmp_path),
+        client,
+        "session-1",
+        web_url="http://127.0.0.1:40000/?session=session-1",
+    )
 
     async def scenario() -> None:
         async with app.run_test() as pilot:
@@ -302,6 +320,9 @@ def test_help_channel_new_and_generation_guard(tmp_path: Path) -> None:
             )
 
             assert app.last_event_id is None
+            assert app.web_url == (
+                "http://127.0.0.1:40000/?session=session-2"
+            )
             assert client.create_calls == 1
             rendered = "\n".join(app.event_lines)
             for command in ("/help", "/new", "/channel", "/abort", "/quit"):
@@ -310,6 +331,7 @@ def test_help_channel_new_and_generation_guard(tmp_path: Path) -> None:
                 assert channel in rendered
             assert "test-key-must-not-render" not in rendered
             assert "已创建新会话" in rendered
+            assert f"WEB {app.web_url}" in rendered
 
             before = list(app.event_lines)
             app._receive_event(
@@ -452,6 +474,101 @@ def test_late_permission_callback_does_not_regress_observe_status(
     assert app._pending_permission_id is None
     assert app.agent_status == "OBSERVE"
     assert logged == ["权限：Allow"]
+
+
+def test_permission_409_is_handled_without_aborting_agent(
+    tmp_path: Path,
+) -> None:
+    class ConflictClient(FakeHttpClient):
+        def resolve_permission(
+            self,
+            session_id: str,
+            permission_id: str,
+            allow: bool,
+        ) -> None:
+            raise HttpClientError(
+                "HTTP 409：permission 已经完成",
+                status_code=409,
+            )
+
+    client = ConflictClient()
+    app = KeTuiApp(make_config(tmp_path), client, "session-1")
+    app.task_running = True
+    app._pending_permission_id = "permission-1"
+    app.agent_status = "CONFIRM"
+    logged: list[str] = []
+    app._write = logged.append  # type: ignore[method-assign]
+    app._set_status = (  # type: ignore[method-assign]
+        lambda value: setattr(app, "agent_status", value)
+    )
+    app._call_ui = (  # type: ignore[method-assign]
+        lambda callback, *args: callback(*args)
+    )
+
+    app._permission_worker(
+        "session-1",
+        0,
+        "permission-1",
+        True,
+    )
+
+    assert client.aborted == []
+    assert app._pending_permission_id is None
+    assert app.agent_status == "ACT"
+    assert logged == ["权限已由其他客户端处理"]
+    assert app.task_running
+
+
+def test_tool_result_closes_permission_modal_without_second_post(
+    tmp_path: Path,
+) -> None:
+    client = FakeHttpClient()
+    app = KeTuiApp(make_config(tmp_path), client, "session-1")
+
+    async def scenario() -> None:
+        async with app.run_test() as pilot:
+            app.task_running = True
+            app._receive_event(
+                event(
+                    1,
+                    "tool_confirm",
+                    permission_id="permission-1",
+                    preview="pytest -q",
+                    tool_call={"name": "bash", "arguments": {}},
+                ),
+                "session-1",
+                0,
+            )
+            await wait_until(
+                pilot,
+                lambda: (
+                    isinstance(app.screen, PermissionModal)
+                    and len(app.screen.query("#deny")) == 1
+                ),
+                "mounted permission modal",
+            )
+
+            app._receive_event(
+                event(
+                    2,
+                    "tool_result",
+                    tool_result={"content": "done", "is_error": False},
+                ),
+                "session-1",
+                0,
+            )
+            await wait_until(
+                pilot,
+                lambda: not isinstance(app.screen, PermissionModal),
+                "permission modal close",
+            )
+
+            assert app._pending_permission_id is None
+            assert client.permissions == []
+            assert app.agent_status == "OBSERVE"
+            assert "OBS done" in app.event_lines
+
+    asyncio.run(scenario())
 
 
 def test_run_tui_aborts_active_task_and_always_cleans_resources(

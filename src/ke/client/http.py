@@ -9,6 +9,15 @@ import httpx
 class HttpClientError(RuntimeError):
     """A safe, user-facing local HTTP client failure."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
 
 class SseProtocolError(HttpClientError):
     """Raised when the local server returns malformed SSE data."""
@@ -114,7 +123,10 @@ class KeHttpClient:
                     message += f"：{body['error']}"
             except (ValueError, json.JSONDecodeError):
                 pass
-            raise HttpClientError(message)
+            raise HttpClientError(
+                message,
+                status_code=response.status_code,
+            )
         try:
             body = response.json()
         except (ValueError, json.JSONDecodeError):

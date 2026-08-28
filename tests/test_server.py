@@ -147,7 +147,16 @@ def test_health_and_sessions_are_isolated(tmp_path: Path) -> None:
         assert first.state.cancelled
         assert not second.state.cancelled
         assert client.post("/session/missing/message", json={"content": "x"}).status_code == 404
-        assert len(app.routes) == 6
+        assert len(app.routes) == 7
+        assert {route.path for route in app.routes} == {
+            "/",
+            "/health",
+            "/session",
+            "/session/{id}/message",
+            "/session/{id}/events",
+            "/session/{id}/permissions/{pid}",
+            "/session/{id}/abort",
+        }
 
 
 def test_message_returns_202_while_worker_is_blocked(tmp_path: Path) -> None:

@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'self'">
+  <title>ke · Web</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1020;
+      --panel: #121a2e;
+      --panel-2: #18223a;
+      --line: #2a3858;
+      --text: #e8edf7;
+      --muted: #98a6c5;
+      --accent: #67d7ff;
+      --good: #68df9b;
+      --warn: #ffc96b;
+      --bad: #ff7d91;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: radial-gradient(circle at top left, #172342, var(--bg) 55%);
+      color: var(--text);
+      font: 15px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+
+    button, textarea { font: inherit; }
+
+    .shell {
+      width: min(1180px, calc(100% - 32px));
+      margin: 24px auto;
+    }
+
+    header, .panel, .composer {
+      border: 1px solid var(--line);
+      background: rgba(18, 26, 46, 0.94);
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.24);
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 18px;
+      border-radius: 14px 14px 0 0;
+    }
+
+    .brand { font-weight: 700; letter-spacing: 0.04em; }
+    .state { color: var(--accent); font-weight: 700; }
+    .connection { color: var(--muted); font-size: 13px; }
+
+    main {
+      display: grid;
+      grid-template-columns: minmax(0, 2fr) minmax(260px, 0.8fr);
+      gap: 14px;
+      margin: 14px 0;
+      min-height: 62vh;
+    }
+
+    .panel { border-radius: 12px; padding: 16px; }
+    .panel h2 { margin: 0 0 12px; font-size: 14px; color: var(--muted); }
+
+    #events {
+      height: 58vh;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .event-line {
+      padding: 8px 10px;
+      margin: 0 0 7px;
+      border-left: 3px solid var(--line);
+      background: rgba(24, 34, 58, 0.72);
+    }
+
+    .event-line.think { border-color: var(--accent); }
+    .event-line.act { border-color: var(--warn); }
+    .event-line.obs { border-color: #a99cff; }
+    .event-line.done { border-color: var(--good); }
+    .event-line.error { border-color: var(--bad); }
+    .event-line.user { border-color: #70a5ff; }
+
+    .meta-grid { display: grid; gap: 12px; }
+    .meta-card { padding: 12px; border: 1px solid var(--line); background: var(--panel-2); }
+    .label { color: var(--muted); font-size: 12px; text-transform: uppercase; }
+    .value { margin-top: 5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+    #permission { display: none; border-color: var(--warn); }
+    .button-row { display: flex; gap: 8px; margin-top: 12px; }
+
+    button {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 13px;
+      color: var(--text);
+      background: #243250;
+      cursor: pointer;
+    }
+
+    button:hover:not(:disabled) { border-color: var(--accent); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    button.primary { color: #071018; background: var(--accent); border-color: var(--accent); }
+    button.danger { background: #3b2130; border-color: #7a3f52; }
+    button.allow { background: #1d4938; border-color: #3c8a68; }
+
+    .composer {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      gap: 10px;
+      padding: 14px;
+      border-radius: 0 0 14px 14px;
+    }
+
+    textarea {
+      min-height: 72px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      padding: 10px;
+      color: var(--text);
+      background: #0c1325;
+    }
+
+    textarea:focus { outline: 2px solid rgba(103, 215, 255, 0.35); }
+
+    @media (max-width: 780px) {
+      main { grid-template-columns: 1fr; }
+      #events { height: 48vh; }
+      .composer { grid-template-columns: 1fr 1fr; }
+      .composer textarea { grid-column: 1 / -1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div class="brand">ke · Web · <span id="state" class="state">IDLE</span></div>
+      <div id="connection" class="connection">初始化…</div>
+    </header>
+
+    <main>
+      <section class="panel" aria-label="Agent事件历史">
+        <h2>Agent Events</h2>
+        <div id="events" role="log" aria-live="polite"></div>
+      </section>
+
+      <aside class="panel">
+        <h2>Runtime</h2>
+        <div class="meta-grid">
+          <div class="meta-card">
+            <div class="label">Session</div>
+            <div id="session-id" class="value">—</div>
+          </div>
+          <div class="meta-card">
+            <div class="label">Current Tool</div>
+            <div id="tool-name" class="value">—</div>
+            <div id="tool-preview" class="value"></div>
+          </div>
+          <div id="permission" class="meta-card">
+            <div class="label">Permission</div>
+            <div id="permission-status" class="value">等待确认</div>
+            <div class="button-row">
+              <button id="deny" class="danger" type="button">Deny</button>
+              <button id="allow" class="allow" type="button">Allow</button>
+            </div>
+          </div>
+          <button id="abort" class="danger" type="button" disabled>Abort</button>
+        </div>
+      </aside>
+    </main>
+
+    <form id="task-form" class="composer">
+      <textarea id="task-input" name="task" placeholder="输入编程任务" required></textarea>
+      <button id="send" class="primary" type="submit">Send</button>
+      <button id="new-session" type="button">New Session</button>
+    </form>
+  </div>
+
+  <script>
+    "use strict";
+
+    const ui = {
+      state: document.getElementById("state"),
+      connection: document.getElementById("connection"),
+      events: document.getElementById("events"),
+      session: document.getElementById("session-id"),
+      toolName: document.getElementById("tool-name"),
+      toolPreview: document.getElementById("tool-preview"),
+      permission: document.getElementById("permission"),
+      permissionStatus: document.getElementById("permission-status"),
+      deny: document.getElementById("deny"),
+      allow: document.getElementById("allow"),
+      abort: document.getElementById("abort"),
+      form: document.getElementById("task-form"),
+      input: document.getElementById("task-input"),
+      send: document.getElementById("send"),
+      newSession: document.getElementById("new-session")
+    };
+
+    let sessionId = null;
+    let source = null;
+    let lastEventId = 0;
+    let running = false;
+    let pendingPermission = null;
+    let terminalSeen = false;
+
+    function setState(value) {
+      ui.state.textContent = value;
+    }
+
+    function setConnection(value) {
+      ui.connection.textContent = value;
+    }
+
+    function appendLine(kind, text) {
+      const line = document.createElement("div");
+      line.className = "event-line " + kind;
+      line.textContent = text;
+      ui.events.appendChild(line);
+      ui.events.scrollTop = ui.events.scrollHeight;
+    }
+
+    function setRunning(value) {
+      running = value;
+      ui.input.disabled = value;
+      ui.send.disabled = value;
+      ui.newSession.disabled = value;
+      ui.abort.disabled = !value;
+    }
+
+    function shortSession(value) {
+      return value ? value.slice(0, 8) : "—";
+    }
+
+    function clearTool() {
+      ui.toolName.textContent = "—";
+      ui.toolPreview.textContent = "";
+      pendingPermission = null;
+      ui.permission.style.display = "none";
+      ui.permissionStatus.textContent = "等待确认";
+      ui.deny.disabled = false;
+      ui.allow.disabled = false;
+    }
+
+    function safeToolSummary(data) {
+      const call = data && typeof data.tool_call === "object" ? data.tool_call : {};
+      const args = call && typeof call.arguments === "object" ? call.arguments : {};
+      const name = typeof call.name === "string" ? call.name : "unknown";
+      let detail = "";
+      if (["read_file", "write_file", "edit_file", "list_dir"].includes(name)) {
+        detail = typeof args.path === "string" ? args.path : "";
+      } else if (name === "bash") {
+        detail = typeof args.command === "string" ? args.command.slice(0, 200) : "";
+      } else if (name === "grep") {
+        detail = typeof args.pattern === "string" ? args.pattern : "";
+      }
+      return detail ? name + "  " + detail : name;
+    }
+
+    async function requestJson(path, options) {
+      const response = await fetch(path, options);
+      let data = {};
+      try {
+        data = await response.json();
+      } catch (error) {
+        data = {};
+      }
+      if (!response.ok) {
+        const message = typeof data.error === "string" ? data.error : "HTTP " + response.status;
+        const failure = new Error(message);
+        failure.status = response.status;
+        throw failure;
+      }
+      return data;
+    }
+
+    function closeEvents() {
+      if (source !== null) {
+        source.close();
+        source = null;
+      }
+      terminalSeen = false;
+    }
+
+    function eventMessage(data) {
+      return data && typeof data.message === "string" ? data.message : "";
+    }
+
+    function renderPermission(data) {
+      const permissionId = typeof data.permission_id === "string" ? data.permission_id : "";
+      if (!permissionId) {
+        appendLine("error", "ERROR 无效的权限事件");
+        setState("ERROR");
+        return;
+      }
+      pendingPermission = permissionId;
+      const call = data && typeof data.tool_call === "object" ? data.tool_call : {};
+      const name = typeof call.name === "string" ? call.name : "unknown";
+      const preview = typeof data.preview === "string" ? data.preview.slice(0, 200) : "";
+      ui.toolName.textContent = name;
+      ui.toolPreview.textContent = preview;
+      ui.permissionStatus.textContent = "等待确认";
+      ui.permission.style.display = "block";
+      ui.deny.disabled = false;
+      ui.allow.disabled = false;
+      ui.deny.focus();
+      setState("CONFIRM");
+    }
+
+    function handleEvent(name, event) {
+      const numericId = Number.parseInt(event.lastEventId, 10);
+      if (Number.isFinite(numericId) && numericId <= lastEventId) {
+        return;
+      }
+      if (Number.isFinite(numericId)) {
+        lastEventId = numericId;
+      }
+      if (name !== "final" && name !== "error") {
+        terminalSeen = false;
+      }
+
+      let data;
+      try {
+        data = JSON.parse(event.data);
+      } catch (error) {
+        appendLine("error", "ERROR SSE数据不是合法JSON");
+        setState("ERROR");
+        closeEvents();
+        setRunning(false);
+        return;
+      }
+
+      if (name === "turn_start") {
+        setRunning(true);
+        setState("THINK");
+        appendLine("think", "THINK  turn " + String(data.turn ?? ""));
+      } else if (name === "tool_request") {
+        setRunning(true);
+        setState("ACT");
+        const summary = safeToolSummary(data);
+        appendLine("act", "ACT  " + summary);
+        ui.toolName.textContent = summary.split("  ", 1)[0];
+        ui.toolPreview.textContent = summary.includes("  ") ? summary.slice(summary.indexOf("  ") + 2) : "";
+      } else if (name === "tool_confirm") {
+        setRunning(true);
+        renderPermission(data);
+      } else if (name === "tool_result") {
+        setRunning(true);
+        setState("OBSERVE");
+        const result = data && typeof data.tool_result === "object" ? data.tool_result : {};
+        const content = typeof result.content === "string" ? result.content : "";
+        appendLine("obs", "OBS  " + content);
+        if (pendingPermission !== null) {
+          ui.permissionStatus.textContent = "该权限已处理";
+          ui.deny.disabled = true;
+          ui.allow.disabled = true;
+          pendingPermission = null;
+        }
+      } else if (name === "context_compact" || name === "context_summary") {
+        setRunning(true);
+        setState("COMPACT");
+        appendLine("obs", "COMPACT  " + eventMessage(data));
+      } else if (name === "final") {
+        terminalSeen = true;
+        setState("DONE");
+        appendLine("done", "DONE  " + eventMessage(data));
+      } else if (name === "error") {
+        terminalSeen = true;
+        setState("ERROR");
+        appendLine("error", "ERROR  " + eventMessage(data));
+      }
+    }
+
+    function openEvents(isAttach) {
+      closeEvents();
+      let opened = false;
+      const current = new EventSource("/session/" + encodeURIComponent(sessionId) + "/events");
+      source = current;
+      setConnection("连接SSE…");
+      current.onopen = function () {
+        opened = true;
+        setConnection("SSE已连接");
+      };
+      ["turn_start", "tool_request", "tool_confirm", "tool_result", "context_compact", "context_summary", "final", "error"].forEach(function (name) {
+        current.addEventListener(name, function (event) {
+          if (source === current) {
+            handleEvent(name, event);
+          }
+        });
+      });
+      current.onerror = function () {
+        if (source !== current) {
+          return;
+        }
+        current.close();
+        source = null;
+        if (terminalSeen) {
+          terminalSeen = false;
+          setRunning(false);
+          setConnection("任务已结束");
+        } else if (!opened) {
+          setState("ERROR");
+          setConnection("SSE连接失败");
+          appendLine("error", isAttach ? "ERROR session不存在或无法连接" : "ERROR SSE连接失败");
+          setRunning(false);
+        } else if (!running) {
+          setState("IDLE");
+          setConnection("会话空闲");
+          setRunning(false);
+        } else {
+          setState("ERROR");
+          setConnection("SSE连接中断");
+          appendLine("error", "ERROR SSE连接中断，任务状态未知");
+        }
+      };
+    }
+
+    async function createSession(clearLog) {
+      if (running) {
+        appendLine("error", "ERROR 当前任务仍在运行，请先Abort");
+        return;
+      }
+      ui.newSession.disabled = true;
+      try {
+        const data = await requestJson("/session", { method: "POST" });
+        sessionId = data.id;
+        lastEventId = 0;
+        closeEvents();
+        clearTool();
+        if (clearLog) {
+          ui.events.textContent = "";
+        }
+        ui.session.textContent = shortSession(sessionId);
+        setState("IDLE");
+        setConnection("会话已创建");
+        appendLine("done", "New session: " + shortSession(sessionId));
+      } catch (error) {
+        setState("ERROR");
+        setConnection("创建会话失败");
+        appendLine("error", "ERROR 创建会话失败");
+      } finally {
+        ui.newSession.disabled = running;
+      }
+    }
+
+    async function sendTask(event) {
+      event.preventDefault();
+      const task = ui.input.value.trim();
+      if (!task || running || !sessionId) {
+        return;
+      }
+      appendLine("user", "你: " + task);
+      ui.input.value = "";
+      setRunning(true);
+      setState("THINK");
+      setConnection("提交任务…");
+      clearTool();
+      try {
+        await requestJson("/session/" + encodeURIComponent(sessionId) + "/message", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: task })
+        });
+        openEvents(false);
+      } catch (error) {
+        setRunning(false);
+        setState("ERROR");
+        const message = error.status === 409 ? "当前任务仍在运行" : "任务提交失败";
+        appendLine("error", "ERROR " + message);
+        setConnection(message);
+      }
+    }
+
+    async function resolvePermission(allow) {
+      if (!pendingPermission) {
+        return;
+      }
+      const permissionId = pendingPermission;
+      ui.deny.disabled = true;
+      ui.allow.disabled = true;
+      ui.permissionStatus.textContent = "提交中…";
+      try {
+        await requestJson(
+          "/session/" + encodeURIComponent(sessionId) + "/permissions/" + encodeURIComponent(permissionId),
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ allow: allow })
+          }
+        );
+        pendingPermission = null;
+        ui.permissionStatus.textContent = allow ? "Allowed" : "Denied";
+        if (ui.state.textContent === "CONFIRM") {
+          setState("ACT");
+        }
+      } catch (error) {
+        pendingPermission = null;
+        if (error.status === 409) {
+          ui.permissionStatus.textContent = "该权限已由其他客户端处理";
+          appendLine("obs", "OBS 该权限已由其他客户端处理");
+        } else {
+          ui.permissionStatus.textContent = "权限提交失败";
+          setState("ERROR");
+          appendLine("error", "ERROR 权限提交失败；未自动允许工具");
+        }
+      }
+    }
+
+    async function abortTask() {
+      if (!running || !sessionId) {
+        return;
+      }
+      ui.abort.disabled = true;
+      setState("ABORTING");
+      try {
+        await requestJson("/session/" + encodeURIComponent(sessionId) + "/abort", { method: "POST" });
+        setConnection("已请求中止");
+      } catch (error) {
+        setState("ERROR");
+        setConnection("中止请求失败");
+        appendLine("error", "ERROR 中止请求失败");
+        ui.abort.disabled = false;
+      }
+    }
+
+    async function bootstrap() {
+      const attached = new URLSearchParams(window.location.search).get("session");
+      if (attached) {
+        sessionId = attached;
+        ui.session.textContent = shortSession(sessionId);
+        setConnection("Attach现有session…");
+        openEvents(true);
+      } else {
+        await createSession(false);
+      }
+    }
+
+    ui.form.addEventListener("submit", sendTask);
+    ui.abort.addEventListener("click", abortTask);
+    ui.newSession.addEventListener("click", function () { createSession(true); });
+    ui.deny.addEventListener("click", function () { resolvePermission(false); });
+    ui.allow.addEventListener("click", function () { resolvePermission(true); });
+    window.addEventListener("beforeunload", closeEvents);
+    bootstrap();
+  </script>
+</body>
+</html>
