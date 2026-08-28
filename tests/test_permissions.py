@@ -107,6 +107,7 @@ def test_confirm_event_is_emitted_before_wait_and_allow_executes(
                 )
             ),
             text_response("done"),
+            text_response("没有适用的自动验证，只能人工确认"),
         ]
     )
     events = run_agent(
@@ -272,6 +273,7 @@ def test_auto_approve_executes_without_confirm(tmp_path: Path) -> None:
                 )
             ),
             text_response("done"),
+            text_response("没有适用的自动验证，只能人工确认"),
         ]
     )
 
@@ -303,7 +305,13 @@ def test_mixed_tool_batch_keeps_order_across_multiple_confirmations(
         ToolCall("grep", "grep", {"pattern": "needle"}),
         ToolCall("bash", "bash", {"command": "echo should-not-run"}),
     ]
-    fake = FakeLLM([tool_response(*calls), text_response("done")])
+    fake = FakeLLM(
+        [
+            tool_response(*calls),
+            text_response("done"),
+            text_response("没有适用的自动验证，只能人工确认"),
+        ]
+    )
     gate = PermissionGate()
     event_iterator = run_agent(
         "mixed",

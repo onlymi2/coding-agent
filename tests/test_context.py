@@ -119,3 +119,45 @@ def test_system_message_cannot_be_appended_after_conversation() -> None:
         assert "最前面" in str(exc)
     else:
         raise AssertionError("late system message should be rejected")
+
+
+def test_compact_preserves_multi_tool_call_protocol_nodes() -> None:
+    first = ToolCall("call-1", "read_file", {"path": "a.py"})
+    second = ToolCall("call-2", "grep", {"pattern": "needle"})
+    context = AgentContext(
+        messages=[
+            Message(role="user", content="inspect"),
+            Message(role="assistant", tool_calls=[first, second]),
+            Message(
+                role="tool",
+                name="read_file",
+                tool_call_id=first.id,
+                content="A" * 2_000,
+            ),
+            Message(
+                role="tool",
+                name="grep",
+                tool_call_id=second.id,
+                content="B" * 2_000,
+            ),
+        ],
+        compact_threshold_tokens=50,
+        preserve_recent_tool_results=0,
+        max_tool_output_chars=4_000,
+    )
+
+    assert context.compact() == 2
+    assert context.messages[1].tool_calls == [first, second]
+    tool_messages = [message for message in context.messages if message.role == "tool"]
+    assert [message.tool_call_id for message in tool_messages] == [
+        first.id,
+        second.id,
+    ]
+    assert all(message.collapsed for message in tool_messages)
+
+    seen_call_ids: set[str] = set()
+    for message in context.messages:
+        if message.role == "assistant":
+            seen_call_ids.update(call.id for call in message.tool_calls)
+        elif message.role == "tool":
+            assert message.tool_call_id in seen_call_ids

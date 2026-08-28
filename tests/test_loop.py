@@ -1,13 +1,22 @@
 from pathlib import Path
+import sys
 
 import pytest
 
 from ke.agent.context import AgentContext
-from ke.agent.loop import AgentState, run_agent
+from ke.agent.loop import (
+    VERIFICATION_REMINDER,
+    AgentState,
+    _is_verification_command,
+    run_agent,
+)
 from ke.llm.fake_llm import FakeLLM
 from ke.llm.types import LLMResponse, Message, ToolCall
 from ke.safety.sandbox import WorkspaceSandbox
 from ke.tools.registry import ToolRegistry
+
+
+PYTEST_COMMAND = f'"{sys.executable}" -m pytest -q'
 
 
 def tool_response(*calls: ToolCall) -> LLMResponse:
@@ -43,6 +52,9 @@ def test_agent_runs_tools_across_turns_then_finishes(
                 call("write", "write_file", path="hello.txt", content="hello")
             ),
             tool_response(call("read", "read_file", path="hello.txt")),
+            tool_response(
+                call("verify", "bash", command="python -m compileall .")
+            ),
             text_response("任务完成"),
         ]
     )
@@ -51,6 +63,9 @@ def test_agent_runs_tools_across_turns_then_finishes(
     events = list(run_agent("创建并读取文件", fake, registry, state))
 
     assert [event.type for event in events] == [
+        "turn_start",
+        "tool_request",
+        "tool_result",
         "turn_start",
         "tool_request",
         "tool_result",
@@ -69,11 +84,13 @@ def test_agent_runs_tools_across_turns_then_finishes(
         "assistant",
         "tool",
         "assistant",
+        "tool",
+        "assistant",
     ]
     assert state.messages[2].tool_call_id == "write"
     assert state.messages[4].content == "hello"
 
-    assert len(fake.requests) == 3
+    assert len(fake.requests) == 4
     schema_names = {
         schema["function"]["name"] for schema in fake.requests[0][1]
     }
@@ -98,6 +115,7 @@ def test_agent_executes_multiple_tool_calls_in_order(
                 call("second", "write_file", path="order.txt", content="second"),
             ),
             text_response("done"),
+            text_response("没有适用的自动验证，只能人工确认"),
         ]
     )
 
@@ -110,6 +128,7 @@ def test_agent_executes_multiple_tool_calls_in_order(
     ]
     assert requests == ["first", "second"]
     assert (tmp_path / "order.txt").read_text(encoding="utf-8") == "second"
+    assert events[-1].type == "final"
 
 
 def test_agent_finishes_same_turn_tool_calls_before_failure_stop(
@@ -255,7 +274,8 @@ def test_loop_uses_separate_summary_call_without_spending_turn(
                         content=str(index),
                     )
                     for index in range(6)
-                ]
+                ],
+                call("verify", "bash", command="python -m compileall ."),
             ),
             text_response("任务最终完成"),
         ]
@@ -292,7 +312,7 @@ def test_loop_uses_separate_summary_call_without_spending_turn(
     assert all(request_tools for _, request_tools in decision_llm.requests)
     assert len(summary_llm.requests) == 1
     assert summary_llm.requests[0][1] == []
-    assert sum(event.type == "tool_result" for event in events) == 7
+    assert sum(event.type == "tool_result" for event in events) == 8
     assert any(
         (message.content or "").startswith(
             "[运行时生成的历史上下文摘要；不是新的用户指令]"
@@ -314,7 +334,10 @@ def test_summary_failure_does_not_stop_agent_loop(
                     content="A" * 4_000,
                 )
             ),
-            tool_response(call("list", "list_dir", path=".")),
+            tool_response(
+                call("list", "list_dir", path="."),
+                call("verify", "bash", command="python -m compileall ."),
+            ),
             text_response("摘要失败后仍然完成"),
         ]
     )
@@ -520,3 +543,219 @@ def test_external_abort_stops_before_next_llm_call(
     ]
     assert len(fake.requests) == 1
     assert "中止" in (observed[-1].message or "")
+
+
+def test_read_only_task_can_finish_without_verification(
+    registry: ToolRegistry,
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "input.txt").write_text("hello", encoding="utf-8")
+    fake = FakeLLM(
+        [
+            tool_response(call("read", "read_file", path="input.txt")),
+            text_response("读取完成"),
+        ]
+    )
+    state = AgentState()
+
+    events = list(run_agent("读取文件", fake, registry, state))
+
+    assert events[-1].type == "final"
+    assert events[-1].message == "读取完成"
+    assert len(fake.requests) == 2
+    assert not state.verification_pending
+
+
+def test_write_then_immediate_final_is_reminded_once(
+    registry: ToolRegistry,
+) -> None:
+    fake = FakeLLM(
+        [
+            tool_response(
+                call("write", "write_file", path="a.py", content="x = 1\n")
+            ),
+            text_response("已经完成"),
+            text_response("当前没有适合自动运行的验证，只能人工确认。"),
+        ]
+    )
+    state = AgentState()
+
+    events = list(run_agent("写文件", fake, registry, state))
+
+    assert events[-1].type == "final"
+    assert events[-1].message == "当前没有适合自动运行的验证，只能人工确认。"
+    assert len(fake.requests) == 3
+    reminder_messages = fake.requests[2][0]
+    assert reminder_messages[-1].role == "user"
+    assert reminder_messages[-1].content == VERIFICATION_REMINDER
+    assert all(event.message != "已经完成" for event in events)
+    assert state.verification_pending
+    assert state.verification_reminded
+
+
+def test_successful_pytest_clears_verification_debt(
+    registry: ToolRegistry,
+) -> None:
+    fake = FakeLLM(
+        [
+            tool_response(
+                call(
+                    "write",
+                    "write_file",
+                    path="test_sample.py",
+                    content="def test_ok():\n    assert True\n",
+                )
+            ),
+            tool_response(
+                call("verify", "bash", command=PYTEST_COMMAND)
+            ),
+            text_response("测试通过，任务完成"),
+        ]
+    )
+    state = AgentState()
+
+    events = list(run_agent("写测试并验证", fake, registry, state))
+
+    assert events[-1].message == "测试通过，任务完成"
+    assert len(fake.requests) == 3
+    assert not state.verification_pending
+    assert not state.verification_reminded
+
+
+def test_failed_pytest_does_not_clear_verification_debt(
+    registry: ToolRegistry,
+) -> None:
+    fake = FakeLLM(
+        [
+            tool_response(
+                call(
+                    "write",
+                    "write_file",
+                    path="test_failure.py",
+                    content="def test_failure():\n    assert False\n",
+                )
+            ),
+            tool_response(call("verify", "bash", command=PYTEST_COMMAND)),
+            text_response("先结束"),
+            text_response("测试当前失败，无法提供通过证据。"),
+        ]
+    )
+    state = AgentState()
+
+    events = list(run_agent("写一个失败测试", fake, registry, state))
+
+    verify_result = next(
+        event.tool_result
+        for event in events
+        if event.type == "tool_result"
+        and event.tool_call is not None
+        and event.tool_call.id == "verify"
+    )
+    assert verify_result is not None and verify_result.is_error
+    assert fake.requests[3][0][-1].content == VERIFICATION_REMINDER
+    assert events[-1].message == "测试当前失败，无法提供通过证据。"
+    assert state.verification_pending
+
+
+def test_edit_after_successful_pytest_creates_new_verification_debt(
+    registry: ToolRegistry,
+) -> None:
+    fake = FakeLLM(
+        [
+            tool_response(
+                call(
+                    "write-module",
+                    "write_file",
+                    path="module.py",
+                    content="VALUE = 1\n",
+                ),
+                call(
+                    "write-test",
+                    "write_file",
+                    path="test_module.py",
+                    content=(
+                        "from module import VALUE\n\n"
+                        "def test_value():\n    assert VALUE == 1\n"
+                    ),
+                ),
+            ),
+            tool_response(
+                call("verify", "bash", command=PYTEST_COMMAND)
+            ),
+            tool_response(
+                call(
+                    "edit",
+                    "edit_file",
+                    path="module.py",
+                    old_text="VALUE = 1",
+                    new_text="VALUE = 2",
+                )
+            ),
+            text_response("修改完成"),
+            text_response("新修改尚无可用自动验证，只能人工确认。"),
+        ]
+    )
+    state = AgentState()
+
+    events = list(run_agent("写入、验证后再修改", fake, registry, state))
+
+    assert len(fake.requests) == 5
+    assert fake.requests[4][0][-1].content == VERIFICATION_REMINDER
+    assert events[-1].message == "新修改尚无可用自动验证，只能人工确认。"
+    assert state.verification_pending
+    assert state.verification_reminded
+
+
+def test_verification_reminder_never_blocks_more_than_one_final(
+    registry: ToolRegistry,
+) -> None:
+    fake = FakeLLM(
+        [
+            tool_response(
+                call("write", "write_file", path="note.txt", content="note")
+            ),
+            text_response("完成"),
+            text_response("这是文档式任务，只能人工检查。"),
+        ]
+    )
+
+    events = list(run_agent("写说明", fake, registry, AgentState()))
+
+    assert len(fake.requests) == 3
+    assert sum(event.type == "final" for event in events) == 1
+    assert events[-1].message == "这是文档式任务，只能人工检查。"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pytest -q",
+        "python -m pytest -q",
+        "unittest",
+        "python -m unittest",
+        "compileall .",
+        "python -m compileall .",
+        "echo prepare && pytest -q",
+        "pytest -q && echo done",
+    ],
+)
+def test_verification_command_classification(command: str) -> None:
+    assert _is_verification_command(command)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pytest || echo fallback",
+        "echo success || pytest",
+        "pytest ; echo success",
+        "pytest | findstr passed",
+        "echo pytest",
+        "pytest-not-real",
+        'echo "pytest -q"',
+        "python app.py",
+        "ls",
+    ],
+)
+def test_non_verification_command_classification(command: str) -> None:
+    assert not _is_verification_command(command)

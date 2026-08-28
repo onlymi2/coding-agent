@@ -209,3 +209,49 @@ def test_summary_request_has_deterministic_input_budget() -> None:
     assert estimate_messages_tokens(summary_messages) <= 300
     assert "[truncated]" in (summary_messages[1].content or "")
     assert "历史数据" in (summary_messages[0].content or "")
+
+
+def test_summary_boundary_keeps_multi_tool_call_group_protocol_closed() -> None:
+    first = ToolCall("call-1", "read_file", {"path": "a.py"})
+    second = ToolCall("call-2", "grep", {"pattern": "needle"})
+    context = AgentContext(
+        messages=[
+            Message(role="system", content="rules"),
+            Message(role="user", content="original task"),
+            Message(role="assistant", content="old analysis " * 300),
+            Message(role="user", content="old progress " * 100),
+            Message(role="assistant", tool_calls=[first, second]),
+            Message(
+                role="tool",
+                name="read_file",
+                tool_call_id=first.id,
+                content="first result",
+            ),
+            Message(
+                role="tool",
+                name="grep",
+                tool_call_id=second.id,
+                content="second result",
+            ),
+        ],
+        compact_threshold_tokens=100,
+        preserve_recent_tool_results=2,
+        preserve_recent_messages=1,
+    )
+
+    assert context.summarize(FakeLLM([text_response("旧中段摘要")]))
+
+    recent = context.messages[-3:]
+    assert recent[0].role == "assistant"
+    assert recent[0].tool_calls == [first, second]
+    assert [message.tool_call_id for message in recent[1:]] == [
+        first.id,
+        second.id,
+    ]
+
+    seen_call_ids: set[str] = set()
+    for message in context.messages:
+        if message.role == "assistant":
+            seen_call_ids.update(call.id for call in message.tool_calls)
+        elif message.role == "tool":
+            assert message.tool_call_id in seen_call_ids

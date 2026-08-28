@@ -1,4 +1,5 @@
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Iterator
 
@@ -11,6 +12,16 @@ from ke.tools.registry import ToolRegistry
 from ke.tools.types import ToolResult
 
 
+VERIFICATION_REMINDER = (
+    "[运行时验证提醒；不是新的用户任务]\n"
+    "你已经修改了文件，但修改后尚无验证证据。"
+    "请运行合适的测试、构建、lint或编译检查。"
+    "如果该任务确实无法或不适合自动验证，请说明原因。"
+)
+_DIRECT_VERIFICATION_COMMANDS = {"pytest", "unittest", "compileall"}
+_PYTHON_COMMAND = re.compile(r"^(?:python(?:\d+(?:\.\d+)*)?|py)(?:\.exe)?$")
+
+
 @dataclass
 class AgentState:
     """Mutable state for one agent run, including external cancellation."""
@@ -19,6 +30,8 @@ class AgentState:
     max_turns: int = 30
     cancelled: bool = False
     turn: int = 0
+    verification_pending: bool = False
+    verification_reminded: bool = False
 
     def __post_init__(self) -> None:
         if self.max_turns < 1:
@@ -45,6 +58,34 @@ def _fingerprint(call: ToolCall) -> tuple[str, str]:
     return call.name, arguments
 
 
+def _is_verification_command(command: str) -> bool:
+    """Conservatively recognize common test or compile shell commands."""
+
+    if any(operator in command for operator in ("||", ";", "|", "\r", "\n")):
+        return False
+    if re.search(r"(?<!&)&(?!&)", command):
+        return False
+
+    segments = re.split(r"\s*&&\s*", command)
+    if any(not segment.strip() for segment in segments):
+        return False
+
+    for segment in segments:
+        parts = segment.strip().split()
+        executable = parts[0].strip('"\'').replace("\\", "/").rsplit("/", 1)[-1]
+        executable = executable.casefold()
+        if executable.removesuffix(".exe") in _DIRECT_VERIFICATION_COMMANDS:
+            return True
+        if (
+            _PYTHON_COMMAND.fullmatch(executable)
+            and len(parts) >= 3
+            and parts[1].casefold() == "-m"
+            and parts[2].casefold() in _DIRECT_VERIFICATION_COMMANDS
+        ):
+            return True
+    return False
+
+
 def run_agent(
     task: str,
     llm: LlmClient,
@@ -55,6 +96,8 @@ def run_agent(
 ) -> Iterator[AgentEvent]:
     """Run the model-tool loop and expose every important step as an event."""
 
+    state.verification_pending = False
+    state.verification_reminded = False
     state.context.append(Message(role="user", content=task))
     context_llm = llm if summary_llm is None else summary_llm
     consecutive_errors = 0
@@ -103,6 +146,15 @@ def run_agent(
             return
 
         if not assistant.tool_calls:
+            if (
+                state.verification_pending
+                and not state.verification_reminded
+            ):
+                state.verification_reminded = True
+                state.context.append(
+                    Message(role="user", content=VERIFICATION_REMINDER)
+                )
+                continue
             yield AgentEvent(
                 type="final",
                 turn=state.turn,
@@ -156,6 +208,18 @@ def run_agent(
                 tool_call=call,
                 tool_result=result,
             )
+
+            if not result.is_error:
+                if call.name in {"write_file", "edit_file"}:
+                    state.verification_pending = True
+                    state.verification_reminded = False
+                elif (
+                    call.name == "bash"
+                    and isinstance(call.arguments.get("command"), str)
+                    and _is_verification_command(call.arguments["command"])
+                ):
+                    state.verification_pending = False
+                    state.verification_reminded = False
 
             if state.context.should_compact():
                 tokens_before = state.context.estimate_tokens()

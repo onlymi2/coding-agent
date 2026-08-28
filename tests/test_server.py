@@ -431,6 +431,7 @@ def test_auto_approve_dangerous_tool_does_not_block(tmp_path: Path) -> None:
                     )
                 ),
                 text_response("done"),
+                text_response("没有适用的自动验证，只能人工确认"),
             ]
         ),
         auto_approve=True,
