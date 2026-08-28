@@ -35,3 +35,4 @@ dist/
 Thumbs.db
 
 .tmp_pytest/
+.pytest_tmp/

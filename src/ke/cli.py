@@ -5,28 +5,46 @@ from typing import Any
 
 from ke import __version__
 from ke.client.run import run_task
+from ke.client.tui import run_tui
 from ke.config import ConfigError, KeConfig, load_config
 from ke.server.runtime import serve as serve_runtime
 
 
 def _add_runtime_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--workspace", default=None, help="Agent workspace 路径")
-    parser.add_argument("--channel", default=None, help="模型渠道名称")
-    parser.add_argument("--base-url", default=None, help="OpenAI 兼容 API 地址")
-    parser.add_argument("--model", default=None, help="模型名称")
+    parser.add_argument(
+        "--workspace",
+        default=argparse.SUPPRESS,
+        help="Agent workspace 路径",
+    )
+    parser.add_argument(
+        "--channel",
+        default=argparse.SUPPRESS,
+        help="模型渠道名称",
+    )
+    parser.add_argument(
+        "--base-url",
+        default=argparse.SUPPRESS,
+        help="OpenAI 兼容 API 地址",
+    )
+    parser.add_argument(
+        "--model",
+        default=argparse.SUPPRESS,
+        help="模型名称",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ke",
         description="ke：一个自研的本地编程智能体缰绳。",
-        epilog="当前提供 ke serve 和无 TUI 的 ke run。",
+        epilog="裸 ke 启动 Textual；也可使用 ke serve 或 ke run。",
     )
     parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__version__}",
     )
+    _add_runtime_options(parser)
     subparsers = parser.add_subparsers(dest="command")
 
     serve_parser = subparsers.add_parser(
@@ -35,8 +53,16 @@ def build_parser() -> argparse.ArgumentParser:
         description="启动已有的六接口 Starlette 服务。",
     )
     _add_runtime_options(serve_parser)
-    serve_parser.add_argument("--host", default=None, help="监听地址")
-    serve_parser.add_argument("--port", default=None, help="监听端口")
+    serve_parser.add_argument(
+        "--host",
+        default=argparse.SUPPRESS,
+        help="监听地址",
+    )
+    serve_parser.add_argument(
+        "--port",
+        default=argparse.SUPPRESS,
+        help="监听端口",
+    )
     serve_parser.add_argument(
         "--yes",
         action="store_true",
@@ -78,9 +104,6 @@ def _print_server_info(config: KeConfig) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.command is None:
-        parser.print_help()
-        return 0
 
     try:
         config = load_config(overrides=_config_overrides(args))
@@ -89,6 +112,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     try:
+        if args.command is None:
+            return run_tui(config)
         if args.command == "serve":
             _print_server_info(config)
             serve_runtime(config, auto_approve=args.yes)

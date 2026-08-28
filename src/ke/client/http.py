@@ -199,9 +199,9 @@ class KeHttpClient:
         self,
         session_id: str,
         *,
+        last_event_id: int | None = None,
         max_reconnects: int = 3,
     ) -> Iterator[SseEvent]:
-        last_event_id: int | None = None
         reconnects = 0
         while True:
             try:

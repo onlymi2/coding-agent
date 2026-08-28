@@ -125,6 +125,29 @@ def test_listen_events_reconnects_with_latest_event_id() -> None:
     assert requests[1].headers["last-event-id"] == "1"
 
 
+def test_listen_events_accepts_an_initial_cursor() -> None:
+    captured: dict[str, str | None] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["last_event_id"] = request.headers.get("last-event-id")
+        return httpx.Response(
+            200,
+            text='id: 6\nevent: final\ndata: {"type":"final"}\n\n',
+            headers={"content-type": "text/event-stream"},
+        )
+
+    with KeHttpClient(
+        "http://test",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        events = list(
+            client.listen_events("session", last_event_id=5)
+        )
+
+    assert captured["last_event_id"] == "5"
+    assert [event.id for event in events] == [6]
+
+
 @pytest.mark.parametrize(
     ("lines", "message"),
     [

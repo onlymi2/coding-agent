@@ -17,7 +17,7 @@ class ServerLike(Protocol):
     def stop(self) -> None: ...
 
 
-def _tool_summary(data: dict[str, Any]) -> str:
+def safe_tool_summary(data: dict[str, Any]) -> str:
     call = data.get("tool_call")
     if not isinstance(call, dict):
         return "unknown"
@@ -45,7 +45,7 @@ def _print_event(event: SseEvent, output: Callable[[str], None]) -> None:
     if event.event == "turn_start":
         output(f"[THINK] turn {event.data.get('turn', '')}")
     elif event.event == "tool_request":
-        output(f"[ACT] {_tool_summary(event.data)}")
+        output(f"[ACT] {safe_tool_summary(event.data)}")
     elif event.event == "tool_result":
         result = event.data.get("tool_result")
         content = result.get("content", "") if isinstance(result, dict) else ""

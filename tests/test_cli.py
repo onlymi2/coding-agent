@@ -19,11 +19,55 @@ def test_help_is_available(capsys: pytest.CaptureFixture[str]) -> None:
     assert "run" in output
 
 
-def test_cli_without_arguments_prints_help(
-    capsys: pytest.CaptureFixture[str],
+def test_cli_without_arguments_starts_tui(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    captured: dict[str, object] = {}
+    config = fake_config(tmp_path)
+    monkeypatch.setattr(cli_module, "load_config", lambda **kwargs: config)
+
+    def fake_tui(value: KeConfig) -> int:
+        captured["config"] = value
+        return 0
+
+    monkeypatch.setattr(cli_module, "run_tui", fake_tui)
+
     assert main([]) == 0
-    assert "usage: ke" in capsys.readouterr().out
+    assert captured == {"config": config}
+
+
+def test_bare_cli_runtime_options_enter_config_overrides(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_load_config(*, overrides: dict[str, object]) -> KeConfig:
+        captured.update(overrides)
+        return fake_config(tmp_path)
+
+    monkeypatch.setattr(cli_module, "load_config", fake_load_config)
+    monkeypatch.setattr(cli_module, "run_tui", lambda config: 0)
+
+    assert main(
+        [
+            "--workspace",
+            str(tmp_path),
+            "--channel",
+            "local",
+            "--base-url",
+            "http://localhost:8000/v1",
+            "--model",
+            "local-model",
+        ]
+    ) == 0
+    assert captured == {
+        "workspace": str(tmp_path),
+        "channel": "local",
+        "base_url": "http://localhost:8000/v1",
+        "model": "local-model",
+    }
 
 
 @pytest.mark.parametrize("command", ["serve", "run"])
