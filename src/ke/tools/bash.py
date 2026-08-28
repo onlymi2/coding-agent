@@ -11,6 +11,17 @@ DEFAULT_TIMEOUT_SECONDS = 60.0
 DEFAULT_MAX_OUTPUT_CHARS = 8000
 
 
+def _child_environment() -> dict[str, str]:
+    """Copy the environment while filtering every ``*_API_KEY`` variable."""
+
+    child_env = os.environ.copy()
+    for name in tuple(child_env):
+        normalized = name.upper()
+        if normalized == "KE_API_KEY" or normalized.endswith("_API_KEY"):
+            child_env.pop(name, None)
+    return child_env
+
+
 def _as_text(value: str | bytes | None) -> str:
     if value is None:
         return ""
@@ -82,6 +93,7 @@ def bash(
         process = subprocess.Popen(
             command,
             cwd=sandbox.workspace,
+            env=_child_environment(),
             shell=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

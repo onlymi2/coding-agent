@@ -75,6 +75,33 @@ def test_bash_replaces_undecodable_output(tmp_path: Path) -> None:
     assert "�" in result.content
 
 
+def test_bash_filters_agent_api_keys_but_preserves_normal_environment(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("KE_API_KEY", "ke-super-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-super-secret")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-super-secret")
+    monkeypatch.setenv("KE_TEST_VISIBLE", "hello")
+
+    result = bash(
+        WorkspaceSandbox(tmp_path),
+        (
+            'python -c "import os; '
+            "print(os.getenv('KE_API_KEY')); "
+            "print(os.getenv('OPENAI_API_KEY')); "
+            "print(os.getenv('DEEPSEEK_API_KEY')); "
+            "print(os.getenv('KE_TEST_VISIBLE'))\""
+        ),
+    )
+
+    assert not result.is_error
+    assert "ke-super-secret" not in result.content
+    assert "openai-super-secret" not in result.content
+    assert "deepseek-super-secret" not in result.content
+    assert "hello" in result.content
+
+
 def test_bash_truncates_long_output_and_keeps_head_and_tail(tmp_path: Path) -> None:
     result = bash(
         WorkspaceSandbox(tmp_path),

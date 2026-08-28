@@ -68,6 +68,10 @@ ke run --yes --workspace examples/demo "写一个计算器"
 
 普通 `ke run` 是一次性 headless 客户端，遇到写文件、编辑文件或执行命令时询问 `y/N`，默认拒绝；`ke run --yes` 让内嵌 Server 使用 `auto_approve=True`。一次性 run 使用动态 loopback 端口，结束或 Ctrl+C 后关闭内嵌 Server。
 
+`bash` 属于 guarded local execution，不是操作系统级 sandbox。Runtime 将命令的 `cwd` 固定到 workspace，并提供危险工具确认、超时、进程树终止和有界输出；子进程继承正常的 `PATH`、虚拟环境等运行变量，但不会继承 `KE_API_KEY` 或当前渠道的 `*_API_KEY` 凭证。
+
+成功执行 `write_file` 或 `edit_file` 后，如果还没有成功的测试、编译等环境验证证据，Harness 会在模型第一次声明完成时回灌一次验证提醒。验证失败不会清除该提醒状态；若任务确实无法自动验证，模型说明原因后仍可结束，不会形成无限循环。
+
 ## 真实模型演示准备
 
 真实 calculator 演示只使用 `examples/demo/` 作为 workspace，不要在仓库根目录运行演示任务。程序不会自动加载 `.env`；在 PowerShell 中由当前进程显式设置配置：
