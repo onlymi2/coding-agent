@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+/ke.yaml
 
 # Virtual environments
 .venv/
@@ -36,3 +37,7 @@ Thumbs.db
 
 .tmp_pytest/
 .pytest_tmp/
+
+# Generated contents of the local E2E demo workspace
+/examples/demo/*
+!/examples/demo/.gitkeep

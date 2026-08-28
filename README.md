@@ -1,15 +1,44 @@
 # ke-agent
 
-`ke` 是一个计划从零实现的本地 coding agent harness。本仓库当前完成到阶段十一：内置单页 Web 客户端。
+`ke` 是一个从零实现的本地 coding agent harness，不依赖 LangChain、OpenAI Agents SDK、Claude Agent SDK、AutoGen、CrewAI 等 Agent 框架。模型通过 OpenAI-compatible tool calling 选择动作；文件读写、搜索和命令执行均由本机 Runtime 完成。
 
-当前阶段提供可安装的 Python 包、六个本地工具、事件驱动 Agent Loop、三级上下文压缩、OpenAI 兼容客户端，以及带内置 Web 页面的本地 HTTP/SSE Server。裸 `ke` 会启动 Textual 交互终端；`ke serve` 只启动常驻服务；`ke run` 启动临时 loopback Server，再通过 HTTP/SSE 完成一次 headless 任务。TUI、Web 和 headless run 都是同一 Server Runtime 的薄客户端。
+## 核心特性
 
-## 环境要求
+- 自研 Agent Loop，按顺序处理同一轮的多个 tool calls，并将工具成功或失败结果回灌模型。
+- 六个本地工具：`read_file`、`write_file`、`edit_file`、`list_dir`、`grep`、`bash`。
+- Verification Gate：文件修改后，在首次未经验证的完成声明前提醒模型补充验证证据。
+- 多种终止保护：最大轮数、连续工具错误、相同工具与参数的 doom-loop 检测，以及外部 abort。
+- Workspace 路径约束：文件路径规范化后必须位于 workspace 内；默认拒绝读取 `.env` 等敏感环境文件，但允许 `.env.example`。
+- 工具确认门：`read_file`、`list_dir`、`grep` 自动执行；`write_file`、`edit_file`、`bash` 默认需要人工确认。
+- Guarded local command execution：固定 workspace `cwd`、timeout、进程树终止、有界输出以及子进程 API Key 环境变量过滤。
+- 三级上下文管理：单条工具输出截断、旧工具结果确定性折叠，以及不带工具的 LLM-assisted semantic summary。
+- C/S 架构：Starlette HTTP Server 与 SSE 事件流为 Textual TUI、内置 Web 客户端和 headless `ke run` 提供同一 Runtime。
+- OpenAI-compatible LLM 客户端，通过配置切换兼容渠道，不让 Agent Loop 依赖具体模型厂商 SDK 对象。
+- FakeLLM、MockTransport 和本地替身支持完全离线的核心测试。
+
+Agent 的运行流程可以映射为 THINK、ACT、OBSERVE、COMPACT、DONE 几个阶段；这些阶段通过事件向客户端暴露，而不是另一套 UI 内 Agent 逻辑。
+
+## 架构
+
+```text
+        ke (TUI) / Web / ke run
+                    │
+                 HTTP/SSE
+                    │
+      ke serve / Embedded Server Runtime
+                    │
+                Agent Loop
+               ╱          ╲
+       Local Tools     OpenAI-compatible LLM
+```
+
+裸 `ke`、Web 和 headless `ke run` 都是同一个 Server Runtime 的薄客户端。AgentEvent 事件流是 TUI、Web、headless 客户端和测试共享的运行时事实来源。
+
+## 环境要求与安装
 
 - Python 3.11 或更高版本
-- API Key 只能从进程环境变量读取
 
-## 安装
+创建虚拟环境：
 
 ```bash
 python -m venv .venv
@@ -29,52 +58,13 @@ source .venv/bin/activate
 python -m pip install -e ".[dev]"
 ```
 
-按需复制无密钥的 YAML 示例配置：
+## 配置
 
-```bash
-cp ke.yaml.example ke.yaml
-```
+`ke` 不会自动加载 `.env`，也不依赖 `python-dotenv`。`.env.example` 只是环境变量名称和安全示例模板；`.env` 只能作为本地记录，并必须保持在 `.gitignore` 中。
 
-运行前设置环境变量 `KE_API_KEY`、`KE_BASE_URL`、`KE_MODEL`、`KE_CHANNEL`。`.env` 仅可作为本地配置记录，程序不会自动加载，且必须保持在 `.gitignore` 中。
+API Key 只从进程环境变量读取：优先使用 `KE_API_KEY`，也可以使用当前 channel 对应的 `<CHANNEL>_API_KEY`，例如 OpenAI channel 对应 `OPENAI_API_KEY`。不要把密钥写入命令行或 YAML。
 
-`.env.example` 只是环境变量名称和安全示例模板，`ke` 本身不会自动读取 `.env`。API Key 只从进程环境变量读取；`ke.yaml` 禁止包含 API Key、`secret` 或 `token` 等敏感字段。本项目不依赖 `python-dotenv`。
-
-## CLI
-
-API Key 只从环境变量读取，例如 `KE_API_KEY` 或当前渠道对应的环境变量；不会从 `ke.yaml` 或命令行参数读取。
-
-```bash
-python -m ke --help
-python -m ke --version
-python -m ke
-python -m ke serve
-python -m ke run "你的编程任务"
-```
-
-安装后也可以直接运行：
-
-```bash
-ke --help
-ke
-ke serve
-ke run "创建一个 hello.py 并运行验证"
-ke run --yes "创建一个 hello.py 并运行验证"
-ke run --yes --workspace examples/demo "写一个计算器"
-```
-
-裸 `ke` 启动 Textual 交互终端，并通过内嵌 Server 的 HTTP/SSE 接口工作。TUI 日志会显示一个可复制的 `WEB http://127.0.0.1:<port>/?session=<id>` 地址；在浏览器打开它会 attach 到同一个 session，两端观察同一串 Agent 事件。
-
-`ke serve` 只启动 HTTP/SSE 服务，默认监听 `127.0.0.1:8765`。浏览器访问 `http://127.0.0.1:8765/` 时，Web 客户端会创建自己的 session；访问 `http://127.0.0.1:8765/?session=<id>` 时则 attach 已有 session。网页只使用现有 HTTP API 和 SSE，不直接访问模型、工具或文件系统。
-
-普通 `ke run` 是一次性 headless 客户端，遇到写文件、编辑文件或执行命令时询问 `y/N`，默认拒绝；`ke run --yes` 让内嵌 Server 使用 `auto_approve=True`。一次性 run 使用动态 loopback 端口，结束或 Ctrl+C 后关闭内嵌 Server。
-
-`bash` 属于 guarded local execution，不是操作系统级 sandbox。Runtime 将命令的 `cwd` 固定到 workspace，并提供危险工具确认、超时、进程树终止和有界输出；子进程继承正常的 `PATH`、虚拟环境等运行变量，但不会继承 `KE_API_KEY` 或当前渠道的 `*_API_KEY` 凭证。
-
-成功执行 `write_file` 或 `edit_file` 后，如果还没有成功的测试、编译等环境验证证据，Harness 会在模型第一次声明完成时回灌一次验证提醒。验证失败不会清除该提醒状态；若任务确实无法自动验证，模型说明原因后仍可结束，不会形成无限循环。
-
-## 真实模型演示准备
-
-真实 calculator 演示只使用 `examples/demo/` 作为 workspace，不要在仓库根目录运行演示任务。程序不会自动加载 `.env`；在 PowerShell 中由当前进程显式设置配置：
+常用环境变量：
 
 ```powershell
 $env:KE_API_KEY="<your-key>"
@@ -83,84 +73,122 @@ $env:KE_MODEL="<model>"
 $env:KE_CHANNEL="<channel>"
 ```
 
-`.env` 仍然只能作为本地记录并保持在 `.gitignore` 中，`.env.example` 只是模板。API Key 只从进程环境变量读取，`ke.yaml` 禁止保存 API Key、`secret` 或 `token`，项目不会引入或调用 `python-dotenv`。
+`ke.yaml` 只用于保存 channel、base URL、model、workspace、host、port 等非敏感配置，可从 `ke.yaml.example` 开始编写。配置加载器会拒绝 YAML 任意层级中的 API Key、`secret`、`token` 等敏感字段。配置优先级为显式 CLI override、环境变量、`ke.yaml`、内置默认值。
 
-录像或试跑前，从仓库根目录执行以下固定范围的 PowerShell reset。它只清理 `examples/demo` 内可能由上一次演示生成的文件，并保留 `.gitkeep`：
+## 使用
 
-```powershell
-Remove-Item -LiteralPath examples/demo/calculator.py -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath examples/demo/tests -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath examples/demo/.pytest_cache -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath examples/demo/__pycache__ -Recurse -Force -ErrorAction SilentlyContinue
+```bash
+python -m ke --help
+python -m ke
+python -m ke serve
+python -m ke run "你的编程任务"
+python -m ke run --yes "你的编程任务"
+python -m ke run --yes --workspace examples/demo "你的编程任务"
 ```
 
-演示命令：
+- `python -m ke`：启动 Textual TUI 和内嵌 loopback Server。TUI 会显示可复制的 Web attach URL。
+- `python -m ke serve`：启动常驻 HTTP/SSE Server，默认地址为 `http://127.0.0.1:8765/`，该地址同时提供内置 Web 客户端。
+- `python -m ke run "任务"`：启动一次性内嵌 Server，并通过 HTTP/SSE 运行 headless 客户端。
+- `--yes`：由 Server Runtime 自动批准 `write_file`、`edit_file`、`bash`；默认模式仍会请求人工确认。
+
+Web 可直接创建新 session，也可以通过 `/?session=<id>` attach 到已有 TUI session。客户端只消费 HTTP API 和 SSE，不直接调用 LLM、Agent Loop 或本地工具。
+
+## 安全边界
+
+`bash` 是 guarded local execution，不是操作系统级 sandbox。命令仍以 `shell=True` 在本机执行，因此应只在可信 workspace 和合适的人工确认策略下使用。
+
+Runtime 为 `bash` 提供以下边界：
+
+- `cwd` 固定为当前 workspace。
+- `write_file`、`edit_file`、`bash` 默认经过人工确认。
+- 命令 timeout，并在超时后终止相应进程树。
+- stdout/stderr 统一捕获并进行有界截断。
+- 子进程继承 `PATH`、虚拟环境、临时目录等普通环境变量，但移除 `KE_API_KEY` 以及所有名称以 `*_API_KEY` 结尾的环境变量。
+
+文件系统工具只能访问规范化后仍位于 workspace 内的路径。该约束不是完整的操作系统隔离，也不替代容器、虚拟机或最小权限账户。
+
+## Verification Gate
+
+成功执行 `write_file` 或 `edit_file` 会产生验证债务。成功的 `pytest`、`unittest`、`compileall` 或对应 `python/py -m ...` bash 命令可以清除债务；失败的验证不会清除。
+
+如果模型在存在验证债务时直接声明完成，Harness 会向上下文回灌一次运行时提醒，要求运行合适的测试或编译检查。若任务确实无法自动验证，模型可以在下一次回复中说明原因并结束；Harness 不通过 NLP 判断该说明是否“充分”，也不会无限阻止完成。
+
+为避免把 shell fallback 当成成功验证，含 `||`、`;` 或管道的命令不作为验证证据；纯 `&&` 命令链只有在整条命令成功且其中包含受支持的验证命令时才可清除债务。
+
+## 真实 E2E 示例
+
+`examples/demo/` 是真实模型演示的独立 workspace。Git 只保留其中的 `.gitkeep`，Agent 生成的 calculator、测试和缓存均为本地临时文件，不会进入项目源码或测试目录。
+
+在 PowerShell 中设置所需进程环境变量后，从仓库根目录运行：
 
 ```powershell
 python -m ke run --yes --workspace examples/demo "写一个命令行计算器 calculator.py：支持加减乘除，以及 tests/test_calculator.py，然后运行 pytest 直到通过。"
 ```
 
-这里不创建 `examples/demo/src/` 或第二套 Python package。任务中的 `calculator.py`、`tests/test_calculator.py` 和 `pytest -q` 都以 `examples/demo` 为唯一根目录；演示前该目录只保留 `.gitkeep`，不预置答案。
-
-真实任务结束后，人工核对：
+任务结束后人工核对生成文件并独立复验：
 
 ```powershell
 Test-Path examples/demo/calculator.py
 Test-Path examples/demo/tests/test_calculator.py
 Push-Location examples/demo
-pytest -q
+python -m pytest -q
 Pop-Location
 ```
 
-第一次真实运行只作为稳定性试跑。建议每次先 reset，连续试跑 2～3 次；确认模型能稳定完成写文件、执行 pytest、根据失败修正并最终 DONE 后，再 reset 一次进行正式录像。
+如需重新开始，可只清理 `examples/demo` 中的生成内容并保留 `.gitkeep`；不要在仓库根目录运行 calculator 任务，也不需要创建 `examples/demo/src/` 或第二套 Python package。
 
-## 当前结构
+## 测试
+
+测试通过 FakeLLM、mock HTTP transport、Starlette TestClient、Textual 测试工具和 fake embedded server 覆盖 Agent Loop、工具、上下文、权限、HTTP/SSE 与客户端行为。默认测试不需要真实模型、真实 API Key 或外部网络。
+
+```bash
+python -m pytest -q
+```
+
+## 项目结构
 
 ```text
 .
-├── pyproject.toml
 ├── .env.example
 ├── ke.yaml.example
+├── pyproject.toml
+├── README.md
 ├── examples/
 │   └── demo/
 │       └── .gitkeep
-└── src/
-    └── ke/
-        ├── __init__.py
-        ├── __main__.py
-        ├── cli.py
-        ├── config.py
-        ├── safety/
-        │   ├── sandbox.py
-        │   ├── output.py
-        │   └── confirm.py
-        ├── tools/
-        │   ├── types.py
-        │   ├── fs.py
-        │   ├── search.py
-        │   ├── bash.py
-        │   └── registry.py
-        ├── agent/
-        │   ├── context.py
-        │   ├── events.py
-        │   ├── loop.py
-        │   └── prompts.py
-        ├── server/
-        │   ├── __init__.py
-        │   ├── app.py
-        │   ├── static.html
-        │   └── runtime.py
-        ├── client/
-        │   ├── __init__.py
-        │   ├── http.py
-        │   ├── run.py
-        │   └── tui.py
-        └── llm/
-            ├── types.py
-            ├── protocol.py
-            ├── parse.py
-            ├── fake_llm.py
-            └── client.py
+├── src/
+│   └── ke/
+│       ├── agent/
+│       │   ├── context.py
+│       │   ├── events.py
+│       │   ├── loop.py
+│       │   └── prompts.py
+│       ├── client/
+│       │   ├── http.py
+│       │   ├── run.py
+│       │   └── tui.py
+│       ├── llm/
+│       │   ├── client.py
+│       │   ├── fake_llm.py
+│       │   ├── parse.py
+│       │   ├── protocol.py
+│       │   └── types.py
+│       ├── safety/
+│       │   ├── confirm.py
+│       │   ├── output.py
+│       │   └── sandbox.py
+│       ├── server/
+│       │   ├── app.py
+│       │   ├── runtime.py
+│       │   └── static.html
+│       ├── tools/
+│       │   ├── bash.py
+│       │   ├── fs.py
+│       │   ├── registry.py
+│       │   ├── search.py
+│       │   └── types.py
+│       ├── __main__.py
+│       ├── cli.py
+│       └── config.py
+└── tests/
 ```
-
-后续能力会严格按照教程分阶段加入。配置优先级为显式覆盖、环境变量、`ke.yaml`、内置默认值；API Key 只允许来自环境变量。阶段十一测试使用 Starlette TestClient、Textual `run_test()`、Pilot、MockTransport、FakeLLM、fake embedded server 和 mock uvicorn，不读取真实 `.env`、不调用真实模型，也不访问外部网络。

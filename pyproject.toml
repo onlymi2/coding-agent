@@ -28,3 +28,6 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "ke.server" = ["static.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
