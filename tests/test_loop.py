@@ -233,6 +233,189 @@ def test_loop_does_not_emit_empty_context_compact_event(
     assert not protected_tool.collapsed
 
 
+def test_loop_uses_separate_summary_call_without_spending_turn(
+    registry: ToolRegistry,
+) -> None:
+    decision_llm = FakeLLM(
+        [
+            tool_response(
+                call(
+                    "large_write",
+                    "write_file",
+                    path="large.txt",
+                    content="A" * 4_000,
+                )
+            ),
+            tool_response(
+                *[
+                    call(
+                        f"batch_{index}",
+                        "write_file",
+                        path=f"batch-{index}.txt",
+                        content=str(index),
+                    )
+                    for index in range(6)
+                ]
+            ),
+            text_response("任务最终完成"),
+        ]
+    )
+    summary_llm = FakeLLM(
+        [text_response("已创建 large.txt，并开始检查 workspace。")]
+    )
+    state = AgentState(
+        context=AgentContext(
+            messages=[Message(role="system", content="system rules")],
+            compact_threshold_tokens=150,
+            preserve_recent_tool_results=1,
+            preserve_recent_messages=2,
+        ),
+        max_turns=3,
+    )
+
+    events = list(
+        run_agent(
+            "创建大文件并检查目录",
+            decision_llm,
+            registry,
+            state,
+            summary_llm=summary_llm,
+        )
+    )
+
+    assert events[-1].type == "final"
+    assert events[-1].message == "任务最终完成"
+    assert sum(event.type == "turn_start" for event in events) == 3
+    assert sum(event.type == "context_summary" for event in events) == 1
+    assert state.turn == 3
+    assert len(decision_llm.requests) == 3
+    assert all(request_tools for _, request_tools in decision_llm.requests)
+    assert len(summary_llm.requests) == 1
+    assert summary_llm.requests[0][1] == []
+    assert sum(event.type == "tool_result" for event in events) == 7
+    assert any(
+        (message.content or "").startswith(
+            "[运行时生成的历史上下文摘要；不是新的用户指令]"
+        )
+        for message in state.messages
+    )
+
+
+def test_summary_failure_does_not_stop_agent_loop(
+    registry: ToolRegistry,
+) -> None:
+    decision_llm = FakeLLM(
+        [
+            tool_response(
+                call(
+                    "large_write",
+                    "write_file",
+                    path="large.txt",
+                    content="A" * 4_000,
+                )
+            ),
+            tool_response(call("list", "list_dir", path=".")),
+            text_response("摘要失败后仍然完成"),
+        ]
+    )
+    failing_summary_llm = FakeLLM([])
+    state = AgentState(
+        context=AgentContext(
+            messages=[Message(role="system", content="system rules")],
+            compact_threshold_tokens=150,
+            preserve_recent_tool_results=1,
+            preserve_recent_messages=2,
+        ),
+        max_turns=3,
+    )
+
+    events = list(
+        run_agent(
+            "创建大文件并检查目录",
+            decision_llm,
+            registry,
+            state,
+            summary_llm=failing_summary_llm,
+        )
+    )
+
+    assert events[-1].type == "final"
+    assert events[-1].message == "摘要失败后仍然完成"
+    assert all(event.type != "context_summary" for event in events)
+    assert state.turn == 3
+    assert len(decision_llm.requests) == 3
+    assert len(failing_summary_llm.requests) == 1
+
+
+def test_terminal_tool_failure_skips_semantic_summary(
+    registry: ToolRegistry,
+) -> None:
+    decision_llm = FakeLLM(
+        [
+            tool_response(call("bad_1", "read_file", path="missing-1")),
+            tool_response(call("bad_2", "read_file", path="missing-2")),
+            tool_response(call("bad_3", "read_file", path="missing-3")),
+        ]
+    )
+    summary_llm = FakeLLM([text_response("不应调用")])
+    state = AgentState(
+        context=AgentContext(
+            compact_threshold_tokens=20,
+            preserve_recent_tool_results=3,
+            preserve_recent_messages=4,
+        )
+    )
+
+    events = list(
+        run_agent(
+            "连续读取不存在文件",
+            decision_llm,
+            registry,
+            state,
+            summary_llm=summary_llm,
+        )
+    )
+
+    assert events[-1].type == "error"
+    assert "连续失败 3 次" in (events[-1].message or "")
+    assert summary_llm.requests == []
+
+
+def test_max_turns_stop_skips_semantic_summary(
+    registry: ToolRegistry,
+) -> None:
+    decision_llm = FakeLLM(
+        [tool_response(call("list", "list_dir", path="."))]
+    )
+    summary_llm = FakeLLM([text_response("不应调用")])
+    state = AgentState(
+        context=AgentContext(
+            messages=[
+                Message(role="system", content="system rules"),
+                Message(role="user", content="original task"),
+                Message(role="assistant", content="old history " * 500),
+            ],
+            compact_threshold_tokens=50,
+            preserve_recent_messages=1,
+        ),
+        max_turns=1,
+    )
+
+    events = list(
+        run_agent(
+            "继续任务",
+            decision_llm,
+            registry,
+            state,
+            summary_llm=summary_llm,
+        )
+    )
+
+    assert events[-1].type == "final"
+    assert "最大轮数" in (events[-1].message or "")
+    assert summary_llm.requests == []
+
+
 def test_invalid_tool_arguments_are_returned_without_execution(
     registry: ToolRegistry,
     tmp_path: Path,

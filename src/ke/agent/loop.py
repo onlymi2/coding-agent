@@ -48,10 +48,12 @@ def run_agent(
     llm: LlmClient,
     tools: ToolRegistry,
     state: AgentState,
+    summary_llm: LlmClient | None = None,
 ) -> Iterator[AgentEvent]:
     """Run the model-tool loop and expose every important step as an event."""
 
     state.context.append(Message(role="user", content=task))
+    context_llm = llm if summary_llm is None else summary_llm
     consecutive_errors = 0
     last_fingerprint: tuple[str, str] | None = None
     repeat_count = 0
@@ -162,3 +164,20 @@ def run_agent(
                 message="检测到 doom loop：同一工具和参数连续执行 3 次",
             )
             return
+
+        if (
+            not state.cancelled
+            and state.turn < state.max_turns
+            and state.context.should_summarize()
+        ):
+            tokens_before = state.context.estimate_tokens()
+            if state.context.summarize(context_llm):
+                tokens_after = state.context.estimate_tokens()
+                yield AgentEvent(
+                    type="context_summary",
+                    turn=state.turn,
+                    message=(
+                        f"LLM 上下文摘要：估算 tokens {tokens_before} -> "
+                        f"{tokens_after}"
+                    ),
+                )

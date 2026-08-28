@@ -1,8 +1,8 @@
 # ke-agent
 
-`ke` 是一个计划从零实现的本地 coding agent harness。本仓库当前完成到教程阶段七：配置系统、System Prompt 和 OpenAI 兼容客户端。
+`ke` 是一个计划从零实现的本地 coding agent harness。本仓库当前完成到阶段 7.5：LLM-assisted Context 语义摘要压缩。
 
-当前阶段提供可安装的 Python 包、`ke` 命令入口、消息与响应边界、六个本地工具、工具注册表、事件驱动 Agent Loop、确定性上下文压缩，以及厂商无关的 OpenAI 兼容 Chat Completions 客户端。真实客户端已经实现，但尚未接入默认 CLI 流程；测试继续使用 FakeLLM，完全离线。尚未实现 LLM 摘要压缩、Server、SSE、permissions、TUI 或网页。
+当前阶段提供可安装的 Python 包、`ke` 命令入口、消息与响应边界、六个本地工具、工具注册表、事件驱动 Agent Loop、三级上下文压缩，以及厂商无关的 OpenAI 兼容 Chat Completions 客户端。第三级压缩使用 `LlmClient` 对旧对话中段生成不带工具的中文摘要，不计入 Agent 轮数，失败时保留确定性压缩结果。真实客户端尚未接入默认 CLI 流程；测试继续使用 FakeLLM，完全离线。尚未实现 Server、SSE、permissions、TUI 或网页。
 
 ## 环境要求
 
@@ -86,4 +86,4 @@ ke --help
             └── client.py
 ```
 
-后续能力会严格按照教程分阶段加入。配置优先级为显式覆盖、环境变量、`ke.yaml`、内置默认值；API Key 只允许来自环境变量，YAML 出现密钥字段会拒绝加载。本阶段测试不读取真实 `.env`、不调用真实模型，也不访问网络；Agent Loop 仍只依赖 `LlmClient` 协议。
+后续能力会严格按照教程分阶段加入。上下文依次执行单条工具输出截断、旧工具结果折叠和旧中段语义摘要；system、原始任务及最近工具轮次始终保留。配置优先级为显式覆盖、环境变量、`ke.yaml`、内置默认值；API Key 只允许来自环境变量。本阶段测试不读取真实 `.env`、不调用真实模型，也不访问网络；Agent Loop 和 Context 都只依赖 `LlmClient` 协议。
