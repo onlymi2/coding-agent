@@ -1,8 +1,8 @@
 # ke-agent
 
-`ke` 是一个计划从零实现的本地 coding agent harness。本仓库当前完成到教程阶段六：Context 上下文管理与确定性压缩。
+`ke` 是一个计划从零实现的本地 coding agent harness。本仓库当前完成到教程阶段七：配置系统、System Prompt 和 OpenAI 兼容客户端。
 
-当前阶段提供可安装的 Python 包、`ke` 命令入口、消息与响应边界、六个本地工具、工具注册表、事件驱动 Agent Loop，以及独立的上下文估算与两层确定性压缩。循环只依赖 `LlmClient` 协议，不依赖具体模型 SDK。尚未实现 LLM 摘要压缩、真实 LLM 网络请求、配置系统、TUI 或 Server。
+当前阶段提供可安装的 Python 包、`ke` 命令入口、消息与响应边界、六个本地工具、工具注册表、事件驱动 Agent Loop、确定性上下文压缩，以及厂商无关的 OpenAI 兼容 Chat Completions 客户端。真实客户端已经实现，但尚未接入默认 CLI 流程；测试继续使用 FakeLLM，完全离线。尚未实现 LLM 摘要压缩、Server、SSE、permissions、TUI 或网页。
 
 ## 环境要求
 
@@ -63,6 +63,7 @@ ke --help
         ├── __init__.py
         ├── __main__.py
         ├── cli.py
+        ├── config.py
         ├── safety/
         │   ├── sandbox.py
         │   └── output.py
@@ -75,12 +76,14 @@ ke --help
         ├── agent/
         │   ├── context.py
         │   ├── events.py
-        │   └── loop.py
+        │   ├── loop.py
+        │   └── prompts.py
         └── llm/
             ├── types.py
             ├── protocol.py
             ├── parse.py
-            └── fake_llm.py
+            ├── fake_llm.py
+            └── client.py
 ```
 
-后续能力会严格按照教程分阶段加入。本阶段使用 FakeLLM 验证压缩后的完整循环，不读取真实 `.env`、不调用真实模型，也不访问网络。Context 使用启发式 token 估算，保留 system、用户任务、assistant 工具调用结构和最近工具结果；Agent Loop 不直接打印，全部过程通过事件暴露。
+后续能力会严格按照教程分阶段加入。配置优先级为显式覆盖、环境变量、`ke.yaml`、内置默认值；API Key 只允许来自环境变量，YAML 出现密钥字段会拒绝加载。本阶段测试不读取真实 `.env`、不调用真实模型，也不访问网络；Agent Loop 仍只依赖 `LlmClient` 协议。
