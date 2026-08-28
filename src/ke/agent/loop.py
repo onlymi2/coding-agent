@@ -2,6 +2,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Iterator
 
+from ke.agent.context import AgentContext
 from ke.agent.events import AgentEvent
 from ke.llm.protocol import LlmClient
 from ke.llm.types import Message, ToolCall
@@ -12,7 +13,7 @@ from ke.tools.registry import ToolRegistry
 class AgentState:
     """Mutable state for one agent run, including external cancellation."""
 
-    messages: list[Message] = field(default_factory=list)
+    context: AgentContext = field(default_factory=AgentContext)
     max_turns: int = 30
     cancelled: bool = False
     turn: int = 0
@@ -23,6 +24,12 @@ class AgentState:
 
     def abort(self) -> None:
         self.cancelled = True
+
+    @property
+    def messages(self) -> list[Message]:
+        """Compatibility view for callers that inspect the message history."""
+
+        return self.context.messages
 
 
 def _fingerprint(call: ToolCall) -> tuple[str, str]:
@@ -44,7 +51,7 @@ def run_agent(
 ) -> Iterator[AgentEvent]:
     """Run the model-tool loop and expose every important step as an event."""
 
-    state.messages.append(Message(role="user", content=task))
+    state.context.append(Message(role="user", content=task))
     consecutive_errors = 0
     last_fingerprint: tuple[str, str] | None = None
     repeat_count = 0
@@ -70,7 +77,7 @@ def run_agent(
         yield AgentEvent(type="turn_start", turn=state.turn)
 
         try:
-            response = llm.complete(state.messages, tools.schemas())
+            response = llm.complete(state.context.messages, tools.schemas())
         except Exception as exc:
             yield AgentEvent(
                 type="error",
@@ -80,7 +87,7 @@ def run_agent(
             return
 
         assistant = response.message
-        state.messages.append(assistant)
+        state.context.append(assistant)
 
         if not assistant.tool_calls:
             yield AgentEvent(
@@ -100,7 +107,7 @@ def run_agent(
             )
 
             result = tools.execute(call)
-            state.messages.append(
+            state.context.append(
                 Message(
                     role="tool",
                     content=result.content,
@@ -114,6 +121,20 @@ def run_agent(
                 tool_call=call,
                 tool_result=result,
             )
+
+            if state.context.should_compact():
+                tokens_before = state.context.estimate_tokens()
+                collapsed_count = state.context.compact()
+                if collapsed_count > 0:
+                    tokens_after = state.context.estimate_tokens()
+                    yield AgentEvent(
+                        type="context_compact",
+                        turn=state.turn,
+                        message=(
+                            f"上下文压缩：估算 tokens {tokens_before} -> "
+                            f"{tokens_after}，折叠 {collapsed_count} 条旧工具结果"
+                        ),
+                    )
 
             consecutive_errors = consecutive_errors + 1 if result.is_error else 0
             fingerprint = _fingerprint(call)

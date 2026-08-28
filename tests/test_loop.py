@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from ke.agent.context import AgentContext
 from ke.agent.loop import AgentState, run_agent
 from ke.llm.fake_llm import FakeLLM
 from ke.llm.types import LLMResponse, Message, ToolCall
@@ -162,6 +163,74 @@ def test_tool_error_is_written_back_and_next_turn_continues(
     returned_messages = fake.requests[1][0]
     assert returned_messages[-1].role == "tool"
     assert "FileNotFoundError" in (returned_messages[-1].content or "")
+
+
+def test_long_tool_result_compacts_then_loop_continues_to_final(
+    registry: ToolRegistry,
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "large.txt").write_text("X" * 4_000, encoding="utf-8")
+    fake = FakeLLM(
+        [
+            tool_response(call("large", "read_file", path="large.txt")),
+            text_response("压缩后继续完成"),
+        ]
+    )
+    state = AgentState(
+        context=AgentContext(
+            compact_threshold_tokens=100,
+            max_tool_output_chars=400,
+            preserve_recent_tool_results=0,
+        )
+    )
+
+    events = list(run_agent("读取大文件", fake, registry, state))
+
+    assert [event.type for event in events] == [
+        "turn_start",
+        "tool_request",
+        "tool_result",
+        "context_compact",
+        "turn_start",
+        "final",
+    ]
+    assert events[-1].message == "压缩后继续完成"
+    assert len(fake.requests) == 2
+    compacted_tool = fake.requests[1][0][-1]
+    assert compacted_tool.role == "tool"
+    assert compacted_tool.collapsed
+    assert compacted_tool.content == "[旧工具结果已折叠：read_file]"
+
+
+def test_loop_does_not_emit_empty_context_compact_event(
+    registry: ToolRegistry,
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "large.txt").write_text("X" * 4_000, encoding="utf-8")
+    fake = FakeLLM(
+        [
+            tool_response(call("large", "read_file", path="large.txt")),
+            text_response("没有机械压缩也能继续"),
+        ]
+    )
+    state = AgentState(
+        context=AgentContext(
+            compact_threshold_tokens=100,
+            max_tool_output_chars=400,
+            preserve_recent_tool_results=2,
+        )
+    )
+
+    events = list(run_agent("读取大文件", fake, registry, state))
+
+    assert state.context.should_compact()
+    assert all(event.type != "context_compact" for event in events)
+    assert events[-1].type == "final"
+    assert events[-1].message == "没有机械压缩也能继续"
+    assert len(fake.requests) == 2
+    protected_tool = fake.requests[1][0][-1]
+    assert protected_tool.role == "tool"
+    assert not protected_tool.collapsed
 
 
 def test_invalid_tool_arguments_are_returned_without_execution(

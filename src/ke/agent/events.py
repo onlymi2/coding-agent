@@ -9,6 +9,7 @@ EventType = Literal[
     "turn_start",
     "tool_request",
     "tool_result",
+    "context_compact",
     "final",
     "error",
 ]
