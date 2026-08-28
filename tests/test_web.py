@@ -98,6 +98,7 @@ def test_static_html_contains_the_thin_http_sse_client() -> None:
         '"error"',
         "lastEventId",
         "terminalSeen",
+        "event instanceof MessageEvent",
     ):
         assert marker in html
 
@@ -118,6 +119,10 @@ def test_static_html_uses_safe_text_rendering_and_no_external_frontend() -> None
     assert "scheduleterminalclose" not in lowered
     assert "settimeout" not in lowered
     assert "if (terminalseen)" in lowered
+    assert "function isagentmessageevent(event)" in lowered
+    assert "source === current && isagentmessageevent(event)" in lowered
+    assert "current.onerror = function (event)" in lowered
+    assert "if (isagentmessageevent(event))" in lowered
     for framework in (
         "react.production",
         "vue.global",

@@ -295,6 +295,10 @@
       return data && typeof data.message === "string" ? data.message : "";
     }
 
+    function isAgentMessageEvent(event) {
+      return event instanceof MessageEvent;
+    }
+
     function renderPermission(data) {
       const permissionId = typeof data.permission_id === "string" ? data.permission_id : "";
       if (!permissionId) {
@@ -392,12 +396,15 @@
       };
       ["turn_start", "tool_request", "tool_confirm", "tool_result", "context_compact", "context_summary", "final", "error"].forEach(function (name) {
         current.addEventListener(name, function (event) {
-          if (source === current) {
+          if (source === current && isAgentMessageEvent(event)) {
             handleEvent(name, event);
           }
         });
       });
-      current.onerror = function () {
+      current.onerror = function (event) {
+        if (isAgentMessageEvent(event)) {
+          return;
+        }
         if (source !== current) {
           return;
         }
