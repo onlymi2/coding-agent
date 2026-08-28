@@ -1,8 +1,8 @@
 # ke-agent
 
-`ke` 是一个计划从零实现的本地 coding agent harness。本仓库当前完成到教程阶段三：workspace 沙箱和本地文件系统工具。
+`ke` 是一个计划从零实现的本地 coding agent harness。本仓库当前完成到教程阶段四：本地 bash 命令执行工具。
 
-当前阶段提供可安装的 Python 包、`ke` 命令入口、消息与响应边界，以及限制在 workspace 内的 `read_file`、`write_file`、`edit_file`、`list_dir`、`grep`。尚未实现 bash、真实 LLM 网络请求、Agent Loop、Context、TUI 或 Server。
+当前阶段提供可安装的 Python 包、`ke` 命令入口、消息与响应边界，以及六个限制在 workspace 内运行的本地工具。`bash` 固定使用 workspace 作为工作目录，并提供超时、退出码处理和输出截断。尚未实现 Tool Registry、真实 LLM 网络请求、Agent Loop、Context、TUI 或 Server。
 
 ## 环境要求
 
@@ -64,11 +64,13 @@ ke --help
         ├── __main__.py
         ├── cli.py
         ├── safety/
-        │   └── sandbox.py
+        │   ├── sandbox.py
+        │   └── output.py
         ├── tools/
         │   ├── types.py
         │   ├── fs.py
-        │   └── search.py
+        │   ├── search.py
+        │   └── bash.py
         └── llm/
             ├── types.py
             ├── protocol.py
@@ -76,4 +78,4 @@ ke --help
             └── fake_llm.py
 ```
 
-后续能力会严格按照教程分阶段加入。本阶段只执行本地文件操作，不读取真实 `.env`，不调用模型，也不访问网络。
+后续能力会严格按照教程分阶段加入。本阶段只执行本地文件和命令操作，不读取真实 `.env`，不调用模型，也不访问网络。`bash` 不是完整 OS 沙箱，不包含危险命令黑名单。
