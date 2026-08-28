@@ -168,6 +168,8 @@ def test_process_environment_uses_fake_key(
         "KE_MAX_TURNS",
         "KE_MAX_TOOL_OUTPUT_CHARS",
         "KE_COMPACT_THRESHOLD_TOKENS",
+        "KE_HOST",
+        "KE_PORT",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("KE_API_KEY", "test-key")
@@ -240,3 +242,58 @@ def test_yaml_rejects_camel_case_secret_fields_in_nested_structures(
         with pytest.raises(ConfigError, match="禁止包含") as captured:
             load_config(yaml_path, environ={"KE_API_KEY": "test-key"})
         assert "forbidden-value" not in str(captured.value)
+
+
+def test_host_and_port_load_from_environment() -> None:
+    config = load_config(
+        None,
+        environ={
+            "KE_API_KEY": "test-key",
+            "KE_HOST": "0.0.0.0",
+            "KE_PORT": "9001",
+        },
+    )
+
+    assert config.host == "0.0.0.0"
+    assert config.port == 9001
+
+
+def test_host_and_port_load_from_yaml(tmp_path: Path) -> None:
+    yaml_path = write_yaml(
+        tmp_path / "ke.yaml",
+        "host: 192.0.2.10\nport: 8123\n",
+    )
+
+    config = load_config(yaml_path, environ={"KE_API_KEY": "test-key"})
+
+    assert config.host == "192.0.2.10"
+    assert config.port == 8123
+
+
+def test_host_and_port_overrides_have_highest_priority(tmp_path: Path) -> None:
+    yaml_path = write_yaml(
+        tmp_path / "ke.yaml",
+        "host: yaml-host\nport: 8000\n",
+    )
+
+    config = load_config(
+        yaml_path,
+        environ={
+            "KE_API_KEY": "test-key",
+            "KE_HOST": "env-host",
+            "KE_PORT": "8001",
+        },
+        overrides={"host": "cli-host", "port": "8002"},
+    )
+
+    assert config.host == "cli-host"
+    assert config.port == 8002
+
+
+@pytest.mark.parametrize("value", ["0", "65536", "not-a-port"])
+def test_invalid_port_is_rejected(value: str) -> None:
+    with pytest.raises(ConfigError, match="KE_PORT"):
+        load_config(
+            None,
+            environ={"KE_API_KEY": "test-key", "KE_PORT": value},
+        )

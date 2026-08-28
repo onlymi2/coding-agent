@@ -1,4 +1,6 @@
 channel: deepseek
+host: 127.0.0.1
+port: 8765
 channels:
   deepseek:
     base_url: https://api.deepseek.com

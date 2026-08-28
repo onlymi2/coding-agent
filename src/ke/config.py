@@ -16,6 +16,8 @@ DEFAULT_MODEL = "deepseek-v4-flash"
 DEFAULT_MAX_TURNS = 30
 DEFAULT_MAX_TOOL_OUTPUT_CHARS = 8_000
 DEFAULT_COMPACT_THRESHOLD_TOKENS = 24_000
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8765
 
 _SENSITIVE_YAML_KEYS = {
     "api_key",
@@ -35,6 +37,8 @@ _OVERRIDE_KEYS = {
     "max_turns",
     "max_tool_output_chars",
     "compact_threshold_tokens",
+    "host",
+    "port",
 }
 
 
@@ -58,6 +62,8 @@ class KeConfig:
     max_turns: int = DEFAULT_MAX_TURNS
     max_tool_output_chars: int = DEFAULT_MAX_TOOL_OUTPUT_CHARS
     compact_threshold_tokens: int = DEFAULT_COMPACT_THRESHOLD_TOKENS
+    host: str = DEFAULT_HOST
+    port: int = DEFAULT_PORT
     channels: dict[str, ChannelConfig] = field(default_factory=dict)
 
 
@@ -155,7 +161,12 @@ def _required_text(name: str, value: object) -> str:
     return str(value).strip()
 
 
-def _positive_int(name: str, value: object, minimum: int = 1) -> int:
+def _positive_int(
+    name: str,
+    value: object,
+    minimum: int = 1,
+    maximum: int | None = None,
+) -> int:
     if isinstance(value, bool):
         raise ConfigError(f"{name} 必须是正整数")
     try:
@@ -166,6 +177,8 @@ def _positive_int(name: str, value: object, minimum: int = 1) -> int:
         raise ConfigError(f"{name} 必须是正整数")
     if parsed < minimum:
         raise ConfigError(f"{name} 必须是大于等于 {minimum} 的整数")
+    if maximum is not None and parsed > maximum:
+        raise ConfigError(f"{name} 必须是小于等于 {maximum} 的整数")
     return parsed
 
 
@@ -288,6 +301,29 @@ def load_config(
             DEFAULT_COMPACT_THRESHOLD_TOKENS,
         ),
     )
+    host = _required_text(
+        "host",
+        _pick(
+            "host",
+            "KE_HOST",
+            explicit,
+            environment,
+            yaml_data.get("host"),
+            DEFAULT_HOST,
+        ),
+    )
+    port = _positive_int(
+        "KE_PORT",
+        _pick(
+            "port",
+            "KE_PORT",
+            explicit,
+            environment,
+            yaml_data.get("port"),
+            DEFAULT_PORT,
+        ),
+        maximum=65_535,
+    )
 
     return KeConfig(
         channel=channel,
@@ -298,5 +334,7 @@ def load_config(
         max_turns=max_turns,
         max_tool_output_chars=max_tool_output_chars,
         compact_threshold_tokens=compact_threshold_tokens,
+        host=host,
+        port=port,
         channels=channels,
     )

@@ -1,8 +1,8 @@
 # ke-agent
 
-`ke` 是一个计划从零实现的本地 coding agent harness。本仓库当前完成到阶段八：HTTP Server、SSE 事件广播与工具权限确认门。
+`ke` 是一个计划从零实现的本地 coding agent harness。本仓库当前完成到阶段九：`ke serve` 与 `ke run` 命令行接线。
 
-当前阶段提供可安装的 Python 包、消息与响应边界、六个本地工具、工具注册表、事件驱动 Agent Loop、三级上下文压缩，以及厂商无关的 OpenAI 兼容 Chat Completions 客户端。薄 HTTP 层提供六个固定接口；Agent 在后台线程运行，事件通过可回放的 SSE 广播。`write_file`、`edit_file` 和 `bash` 默认等待人工确认，其他只读工具自动执行。真实客户端尚未接入默认 CLI 流程；测试继续使用 FakeLLM，完全离线。尚未实现阶段九 CLI 接线、TUI、静态网页或持久化 session。
+当前阶段提供可安装的 Python 包、六个本地工具、事件驱动 Agent Loop、三级上下文压缩、OpenAI 兼容客户端和六接口 HTTP/SSE Server。`ke serve` 启动常驻服务；`ke run` 启动临时 loopback Server，再通过真实 HTTP/SSE 客户端完成一次任务。`write_file`、`edit_file` 和 `bash` 默认需要终端确认，`--yes` 会在 Server 权限策略层自动批准。尚未实现阶段十 TUI、静态网页或持久化 session。
 
 ## 环境要求
 
@@ -29,27 +29,36 @@ source .venv/bin/activate
 python -m pip install -e ".[dev]"
 ```
 
-按需复制示例配置：
+按需复制无密钥的 YAML 示例配置：
 
 ```bash
-cp .env.example .env
 cp ke.yaml.example ke.yaml
 ```
 
-不要把真实 API Key 写入 `.env.example` 或 `ke.yaml`。
+`.env.example` 只列出可用环境变量。程序不会自动加载 `.env`；请由 shell 或进程环境提供 API Key。不要把真实 API Key 写入 `.env.example` 或 `ke.yaml`。
 
 ## CLI
+
+API Key 只从环境变量读取，例如 `KE_API_KEY` 或当前渠道对应的环境变量；不会从 `ke.yaml` 或命令行参数读取。
 
 ```bash
 python -m ke --help
 python -m ke --version
+python -m ke serve
+python -m ke run "你的编程任务"
 ```
 
 安装后也可以直接运行：
 
 ```bash
 ke --help
+ke serve
+ke run "创建一个 hello.py 并运行验证"
+ke run --yes "创建一个 hello.py 并运行验证"
+ke run --yes --workspace examples/demo "写一个计算器"
 ```
+
+`ke serve` 默认监听 `127.0.0.1:8765`。普通 `ke run` 遇到写文件、编辑文件或执行命令时询问 `y/N`，默认拒绝；`--yes` 让内嵌 Server 使用 `auto_approve=True`，适合脚本运行。一次性 run 使用动态 loopback 端口，结束或 Ctrl+C 后关闭内嵌 Server。
 
 ## 当前结构
 
@@ -81,7 +90,12 @@ ke --help
         │   └── prompts.py
         ├── server/
         │   ├── __init__.py
-        │   └── app.py
+        │   ├── app.py
+        │   └── runtime.py
+        ├── client/
+        │   ├── __init__.py
+        │   ├── http.py
+        │   └── run.py
         └── llm/
             ├── types.py
             ├── protocol.py
@@ -90,4 +104,4 @@ ke --help
             └── client.py
 ```
 
-后续能力会严格按照教程分阶段加入。上下文依次执行单条工具输出截断、旧工具结果折叠和旧中段语义摘要；system、原始任务及最近工具轮次始终保留。配置优先级为显式覆盖、环境变量、`ke.yaml`、内置默认值；API Key 只允许来自环境变量。本阶段测试不读取真实 `.env`、不调用真实模型，也不访问网络；Agent Loop 和 Context 都只依赖 `LlmClient` 协议。
+后续能力会严格按照教程分阶段加入。配置优先级为显式覆盖、环境变量、`ke.yaml`、内置默认值；API Key 只允许来自环境变量。阶段九测试使用 MockTransport、FakeLLM、fake embedded server 和 mock uvicorn，不读取真实 `.env`、不调用真实模型，也不访问网络。
