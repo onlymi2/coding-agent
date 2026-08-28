@@ -1,8 +1,8 @@
 # ke-agent
 
-`ke` 是一个计划从零实现的本地 coding agent harness。本仓库当前完成到阶段 7.5：LLM-assisted Context 语义摘要压缩。
+`ke` 是一个计划从零实现的本地 coding agent harness。本仓库当前完成到阶段八：HTTP Server、SSE 事件广播与工具权限确认门。
 
-当前阶段提供可安装的 Python 包、`ke` 命令入口、消息与响应边界、六个本地工具、工具注册表、事件驱动 Agent Loop、三级上下文压缩，以及厂商无关的 OpenAI 兼容 Chat Completions 客户端。第三级压缩使用 `LlmClient` 对旧对话中段生成不带工具的中文摘要，不计入 Agent 轮数，失败时保留确定性压缩结果。真实客户端尚未接入默认 CLI 流程；测试继续使用 FakeLLM，完全离线。尚未实现 Server、SSE、permissions、TUI 或网页。
+当前阶段提供可安装的 Python 包、消息与响应边界、六个本地工具、工具注册表、事件驱动 Agent Loop、三级上下文压缩，以及厂商无关的 OpenAI 兼容 Chat Completions 客户端。薄 HTTP 层提供六个固定接口；Agent 在后台线程运行，事件通过可回放的 SSE 广播。`write_file`、`edit_file` 和 `bash` 默认等待人工确认，其他只读工具自动执行。真实客户端尚未接入默认 CLI 流程；测试继续使用 FakeLLM，完全离线。尚未实现阶段九 CLI 接线、TUI、静态网页或持久化 session。
 
 ## 环境要求
 
@@ -66,7 +66,8 @@ ke --help
         ├── config.py
         ├── safety/
         │   ├── sandbox.py
-        │   └── output.py
+        │   ├── output.py
+        │   └── confirm.py
         ├── tools/
         │   ├── types.py
         │   ├── fs.py
@@ -78,6 +79,9 @@ ke --help
         │   ├── events.py
         │   ├── loop.py
         │   └── prompts.py
+        ├── server/
+        │   ├── __init__.py
+        │   └── app.py
         └── llm/
             ├── types.py
             ├── protocol.py

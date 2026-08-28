@@ -8,6 +8,7 @@ from ke.tools.types import ToolResult
 EventType = Literal[
     "turn_start",
     "tool_request",
+    "tool_confirm",
     "tool_result",
     "context_compact",
     "context_summary",
@@ -25,3 +26,5 @@ class AgentEvent:
     message: str | None = None
     tool_call: ToolCall | None = None
     tool_result: ToolResult | None = None
+    permission_id: str | None = None
+    preview: str | None = None

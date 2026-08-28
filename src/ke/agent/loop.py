@@ -6,7 +6,9 @@ from ke.agent.context import AgentContext
 from ke.agent.events import AgentEvent
 from ke.llm.protocol import LlmClient
 from ke.llm.types import Message, ToolCall
+from ke.safety.confirm import ConfirmationGate
 from ke.tools.registry import ToolRegistry
+from ke.tools.types import ToolResult
 
 
 @dataclass
@@ -49,6 +51,7 @@ def run_agent(
     tools: ToolRegistry,
     state: AgentState,
     summary_llm: LlmClient | None = None,
+    confirmation: ConfirmationGate | None = None,
 ) -> Iterator[AgentEvent]:
     """Run the model-tool loop and expose every important step as an event."""
 
@@ -91,6 +94,14 @@ def run_agent(
         assistant = response.message
         state.context.append(assistant)
 
+        if state.cancelled:
+            yield AgentEvent(
+                type="error",
+                turn=state.turn,
+                message="用户已中止运行",
+            )
+            return
+
         if not assistant.tool_calls:
             yield AgentEvent(
                 type="final",
@@ -102,13 +113,35 @@ def run_agent(
         error_limit_reached = False
         doom_loop_reached = False
         for call in assistant.tool_calls:
+            if state.cancelled:
+                break
             yield AgentEvent(
                 type="tool_request",
                 turn=state.turn,
                 tool_call=call,
             )
+            if state.cancelled:
+                break
 
-            result = tools.execute(call)
+            if confirmation is not None and confirmation.requires_confirmation(call):
+                permission = confirmation.create(call)
+                yield AgentEvent(
+                    type="tool_confirm",
+                    turn=state.turn,
+                    tool_call=call,
+                    permission_id=permission.permission_id,
+                    preview=permission.preview,
+                    message=f"等待用户确认工具：{call.name}",
+                )
+                allowed = confirmation.wait(permission.permission_id)
+                if allowed and not state.cancelled:
+                    result = tools.execute(call)
+                else:
+                    result = ToolResult.error(
+                        f"用户拒绝执行工具：{call.name}"
+                    )
+            else:
+                result = tools.execute(call)
             state.context.append(
                 Message(
                     role="tool",
@@ -149,6 +182,14 @@ def run_agent(
                 error_limit_reached = True
             if repeat_count >= 3:
                 doom_loop_reached = True
+
+        if state.cancelled:
+            yield AgentEvent(
+                type="error",
+                turn=state.turn,
+                message="用户已中止运行",
+            )
+            return
 
         if error_limit_reached:
             yield AgentEvent(
