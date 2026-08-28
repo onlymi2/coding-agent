@@ -1,8 +1,8 @@
 # ke-agent
 
-`ke` 是一个计划从零实现的本地 coding agent harness。本仓库当前完成到教程阶段四：本地 bash 命令执行工具。
+`ke` 是一个计划从零实现的本地 coding agent harness。本仓库当前完成到教程阶段五：Tool Registry、Agent Loop 和 Events。
 
-当前阶段提供可安装的 Python 包、`ke` 命令入口、消息与响应边界，以及六个限制在 workspace 内运行的本地工具。`bash` 固定使用 workspace 作为工作目录，并提供超时、退出码处理和输出截断。尚未实现 Tool Registry、真实 LLM 网络请求、Agent Loop、Context、TUI 或 Server。
+当前阶段提供可安装的 Python 包、`ke` 命令入口、消息与响应边界、六个本地工具，以及可测试的工具注册表和事件驱动 Agent Loop。循环只依赖 `LlmClient` 协议，不依赖具体模型 SDK。尚未实现 Context 压缩、真实 LLM 网络请求、配置系统、TUI 或 Server。
 
 ## 环境要求
 
@@ -70,7 +70,11 @@ ke --help
         │   ├── types.py
         │   ├── fs.py
         │   ├── search.py
-        │   └── bash.py
+        │   ├── bash.py
+        │   └── registry.py
+        ├── agent/
+        │   ├── events.py
+        │   └── loop.py
         └── llm/
             ├── types.py
             ├── protocol.py
@@ -78,4 +82,4 @@ ke --help
             └── fake_llm.py
 ```
 
-后续能力会严格按照教程分阶段加入。本阶段只执行本地文件和命令操作，不读取真实 `.env`，不调用模型，也不访问网络。`bash` 不是完整 OS 沙箱，不包含危险命令黑名单。
+后续能力会严格按照教程分阶段加入。本阶段使用 FakeLLM 验证完整循环，不读取真实 `.env`、不调用真实模型，也不访问网络。Agent Loop 不直接打印，全部过程通过事件暴露。
