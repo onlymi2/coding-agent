@@ -68,6 +68,48 @@ ke run --yes --workspace examples/demo "写一个计算器"
 
 普通 `ke run` 是一次性 headless 客户端，遇到写文件、编辑文件或执行命令时询问 `y/N`，默认拒绝；`ke run --yes` 让内嵌 Server 使用 `auto_approve=True`。一次性 run 使用动态 loopback 端口，结束或 Ctrl+C 后关闭内嵌 Server。
 
+## 真实模型演示准备
+
+真实 calculator 演示只使用 `examples/demo/` 作为 workspace，不要在仓库根目录运行演示任务。程序不会自动加载 `.env`；在 PowerShell 中由当前进程显式设置配置：
+
+```powershell
+$env:KE_API_KEY="<your-key>"
+$env:KE_BASE_URL="<openai-compatible-base-url>"
+$env:KE_MODEL="<model>"
+$env:KE_CHANNEL="<channel>"
+```
+
+`.env` 仍然只能作为本地记录并保持在 `.gitignore` 中，`.env.example` 只是模板。API Key 只从进程环境变量读取，`ke.yaml` 禁止保存 API Key、`secret` 或 `token`，项目不会引入或调用 `python-dotenv`。
+
+录像或试跑前，从仓库根目录执行以下固定范围的 PowerShell reset。它只清理 `examples/demo` 内可能由上一次演示生成的文件，并保留 `.gitkeep`：
+
+```powershell
+Remove-Item -LiteralPath examples/demo/calculator.py -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath examples/demo/tests -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath examples/demo/.pytest_cache -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath examples/demo/__pycache__ -Recurse -Force -ErrorAction SilentlyContinue
+```
+
+演示命令：
+
+```powershell
+python -m ke run --yes --workspace examples/demo "写一个命令行计算器 calculator.py：支持加减乘除，以及 tests/test_calculator.py，然后运行 pytest 直到通过。"
+```
+
+这里不创建 `examples/demo/src/` 或第二套 Python package。任务中的 `calculator.py`、`tests/test_calculator.py` 和 `pytest -q` 都以 `examples/demo` 为唯一根目录；演示前该目录只保留 `.gitkeep`，不预置答案。
+
+真实任务结束后，人工核对：
+
+```powershell
+Test-Path examples/demo/calculator.py
+Test-Path examples/demo/tests/test_calculator.py
+Push-Location examples/demo
+pytest -q
+Pop-Location
+```
+
+第一次真实运行只作为稳定性试跑。建议每次先 reset，连续试跑 2～3 次；确认模型能稳定完成写文件、执行 pytest、根据失败修正并最终 DONE 后，再 reset 一次进行正式录像。
+
 ## 当前结构
 
 ```text
@@ -75,6 +117,9 @@ ke run --yes --workspace examples/demo "写一个计算器"
 ├── pyproject.toml
 ├── .env.example
 ├── ke.yaml.example
+├── examples/
+│   └── demo/
+│       └── .gitkeep
 └── src/
     └── ke/
         ├── __init__.py
