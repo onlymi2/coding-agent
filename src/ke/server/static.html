@@ -23,9 +23,12 @@
 
     * { box-sizing: border-box; }
 
+    html, body { height: 100%; }
+
     body {
       margin: 0;
-      min-height: 100vh;
+      min-height: 100dvh;
+      overflow: hidden;
       background: radial-gradient(circle at top left, #172342, var(--bg) 55%);
       color: var(--text);
       font: 15px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
@@ -35,7 +38,10 @@
 
     .shell {
       width: min(1180px, calc(100% - 32px));
-      margin: 24px auto;
+      height: calc(100dvh - 32px);
+      margin: 16px auto;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
     }
 
     header, .panel, .composer {
@@ -60,16 +66,21 @@
     main {
       display: grid;
       grid-template-columns: minmax(0, 2fr) minmax(260px, 0.8fr);
-      gap: 14px;
-      margin: 14px 0;
-      min-height: 62vh;
+      gap: 12px;
+      margin: 12px 0;
+      min-height: 0;
     }
 
-    .panel { border-radius: 12px; padding: 16px; }
-    .panel h2 { margin: 0 0 12px; font-size: 14px; color: var(--muted); }
+    .panel { min-height: 0; border-radius: 12px; padding: 13px; }
+    .panel h2 { margin: 0 0 8px; font-size: 14px; color: var(--muted); }
+
+    main > section.panel { display: flex; flex-direction: column; }
+    main > aside.panel { overflow-y: auto; }
 
     #events {
-      height: 58vh;
+      min-height: 0;
+      height: 100%;
+      flex: 1;
       overflow-y: auto;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
@@ -89,13 +100,56 @@
     .event-line.error { border-color: var(--bad); }
     .event-line.user { border-color: #70a5ff; }
 
-    .meta-grid { display: grid; gap: 12px; }
-    .meta-card { padding: 12px; border: 1px solid var(--line); background: var(--panel-2); }
+    .meta-grid { display: grid; gap: 8px; }
+    .meta-card { padding: 9px 10px; border: 1px solid var(--line); background: var(--panel-2); }
     .label { color: var(--muted); font-size: 12px; text-transform: uppercase; }
     .value { margin-top: 5px; white-space: pre-wrap; overflow-wrap: anywhere; }
 
+    .phase-graph {
+      display: block;
+      width: 100%;
+      max-width: 320px;
+      height: clamp(190px, 22dvh, 220px);
+      margin: 5px auto 0;
+    }
+
+    .phase-edge {
+      fill: none;
+      stroke: var(--line);
+      stroke-width: 2;
+      marker-end: url(#phase-arrow);
+    }
+
+    .phase-node rect {
+      fill: #10182b;
+      stroke: var(--line);
+      stroke-width: 1.5;
+      opacity: 0.58;
+    }
+
+    .phase-node text {
+      fill: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-anchor: middle;
+    }
+
+    .phase-node.active rect {
+      fill: #18364d;
+      stroke: var(--accent);
+      stroke-width: 2.5;
+      opacity: 1;
+      filter: drop-shadow(0 0 6px rgba(103, 215, 255, 0.5));
+    }
+
+    .phase-node.active text { fill: var(--text); }
+    .phase-error { display: none; margin-top: 4px; color: var(--bad); font-weight: 700; text-align: center; }
+    .phase-error.visible { display: block; }
+
+    #tool-preview { max-height: 3.1em; overflow-y: auto; }
     #permission { display: none; border-color: var(--warn); }
-    .button-row { display: flex; gap: 8px; margin-top: 12px; }
+    #abort { display: none; }
+    .button-row { display: flex; gap: 8px; margin-top: 8px; }
 
     button {
       border: 1px solid var(--line);
@@ -116,13 +170,14 @@
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto auto;
       gap: 10px;
-      padding: 14px;
+      padding: 12px;
       border-radius: 0 0 14px 14px;
     }
 
     textarea {
-      min-height: 72px;
-      resize: vertical;
+      height: 68px;
+      min-height: 68px;
+      resize: none;
       border: 1px solid var(--line);
       border-radius: 9px;
       padding: 10px;
@@ -133,10 +188,16 @@
     textarea:focus { outline: 2px solid rgba(103, 215, 255, 0.35); }
 
     @media (max-width: 780px) {
-      main { grid-template-columns: 1fr; }
-      #events { height: 48vh; }
+      html, body { height: auto; }
+      body { min-height: 100dvh; overflow: auto; }
+      .shell { height: auto; min-height: calc(100dvh - 24px); margin: 12px auto; display: block; }
+      main { grid-template-columns: 1fr; min-height: auto; }
+      main > section.panel { min-height: 52vh; }
+      main > aside.panel { overflow: visible; }
+      #events { height: 48vh; flex: none; }
       .composer { grid-template-columns: 1fr 1fr; }
       .composer textarea { grid-column: 1 / -1; }
+      textarea { resize: vertical; }
     }
   </style>
 </head>
@@ -164,6 +225,43 @@
             <div class="label">Current Tool</div>
             <div id="tool-name" class="value">—</div>
             <div id="tool-preview" class="value"></div>
+          </div>
+          <div id="phase-card" class="meta-card">
+            <div class="label">Agent Phases</div>
+            <svg class="phase-graph" viewBox="0 0 300 255" role="img" aria-label="Agent运行阶段：THINK、ACT、OBSERVE、COMPACT、DONE">
+              <defs>
+                <marker id="phase-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+                  <path d="M0,0 L8,4 L0,8 Z" fill="#2a3858"></path>
+                </marker>
+              </defs>
+              <path class="phase-edge" d="M125 46 C105 60 83 68 70 85"></path>
+              <path class="phase-edge" d="M175 46 C195 60 217 68 230 85"></path>
+              <path class="phase-edge" d="M70 119 L70 150"></path>
+              <path class="phase-edge" d="M22 166 C2 125 25 57 105 29"></path>
+              <path class="phase-edge" d="M120 167 C143 177 166 191 188 205"></path>
+              <path class="phase-edge" d="M225 205 C282 160 280 58 195 29"></path>
+              <g class="phase-node" data-phase="THINK">
+                <rect x="105" y="12" width="90" height="34" rx="9"></rect>
+                <text x="150" y="34">THINK</text>
+              </g>
+              <g class="phase-node" data-phase="ACT">
+                <rect x="30" y="85" width="80" height="34" rx="9"></rect>
+                <text x="70" y="107">ACT</text>
+              </g>
+              <g class="phase-node" data-phase="DONE">
+                <rect x="190" y="85" width="80" height="34" rx="9"></rect>
+                <text x="230" y="107">DONE</text>
+              </g>
+              <g class="phase-node" data-phase="OBSERVE">
+                <rect x="20" y="150" width="100" height="34" rx="9"></rect>
+                <text x="70" y="172">OBSERVE</text>
+              </g>
+              <g class="phase-node" data-phase="COMPACT">
+                <rect x="170" y="205" width="110" height="34" rx="9"></rect>
+                <text x="225" y="227">COMPACT</text>
+              </g>
+            </svg>
+            <div id="phase-error" class="phase-error" role="status">ERROR</div>
           </div>
           <div id="permission" class="meta-card">
             <div class="label">Permission</div>
@@ -195,6 +293,8 @@
       session: document.getElementById("session-id"),
       toolName: document.getElementById("tool-name"),
       toolPreview: document.getElementById("tool-preview"),
+      phaseNodes: Array.from(document.querySelectorAll("[data-phase]")),
+      phaseError: document.getElementById("phase-error"),
       permission: document.getElementById("permission"),
       permissionStatus: document.getElementById("permission-status"),
       deny: document.getElementById("deny"),
@@ -217,6 +317,18 @@
       ui.state.textContent = value;
     }
 
+    function setPhase(value) {
+      ui.phaseNodes.forEach(function (node) {
+        node.classList.toggle("active", node.dataset.phase === value);
+      });
+      ui.phaseError.classList.remove("visible");
+    }
+
+    function setPhaseError() {
+      setPhase(null);
+      ui.phaseError.classList.add("visible");
+    }
+
     function setConnection(value) {
       ui.connection.textContent = value;
     }
@@ -235,20 +347,25 @@
       ui.send.disabled = value;
       ui.newSession.disabled = value;
       ui.abort.disabled = !value;
+      ui.abort.style.display = value ? "block" : "none";
     }
 
     function shortSession(value) {
       return value ? value.slice(0, 8) : "—";
     }
 
-    function clearTool() {
-      ui.toolName.textContent = "—";
-      ui.toolPreview.textContent = "";
+    function hidePermission() {
       pendingPermission = null;
       ui.permission.style.display = "none";
       ui.permissionStatus.textContent = "等待确认";
       ui.deny.disabled = false;
       ui.allow.disabled = false;
+    }
+
+    function clearTool() {
+      ui.toolName.textContent = "—";
+      ui.toolPreview.textContent = "";
+      hidePermission();
     }
 
     function safeToolSummary(data) {
@@ -304,6 +421,7 @@
       if (!permissionId) {
         appendLine("error", "ERROR 无效的权限事件");
         setState("ERROR");
+        setPhaseError();
         return;
       }
       pendingPermission = permissionId;
@@ -338,6 +456,7 @@
       } catch (error) {
         appendLine("error", "ERROR SSE数据不是合法JSON");
         setState("ERROR");
+        setPhaseError();
         closeEvents();
         setRunning(false);
         return;
@@ -346,40 +465,46 @@
       if (name === "turn_start") {
         setRunning(true);
         setState("THINK");
+        setPhase("THINK");
         appendLine("think", "THINK  turn " + String(data.turn ?? ""));
       } else if (name === "tool_request") {
         setRunning(true);
         setState("ACT");
+        setPhase("ACT");
         const summary = safeToolSummary(data);
         appendLine("act", "ACT  " + summary);
         ui.toolName.textContent = summary.split("  ", 1)[0];
         ui.toolPreview.textContent = summary.includes("  ") ? summary.slice(summary.indexOf("  ") + 2) : "";
       } else if (name === "tool_confirm") {
         setRunning(true);
+        setPhase("ACT");
         renderPermission(data);
       } else if (name === "tool_result") {
         setRunning(true);
         setState("OBSERVE");
+        setPhase("OBSERVE");
         const result = data && typeof data.tool_result === "object" ? data.tool_result : {};
         const content = typeof result.content === "string" ? result.content : "";
         appendLine("obs", "OBS  " + content);
-        if (pendingPermission !== null) {
-          ui.permissionStatus.textContent = "该权限已处理";
-          ui.deny.disabled = true;
-          ui.allow.disabled = true;
-          pendingPermission = null;
-        }
+        hidePermission();
       } else if (name === "context_compact" || name === "context_summary") {
         setRunning(true);
         setState("COMPACT");
+        setPhase("COMPACT");
         appendLine("obs", "COMPACT  " + eventMessage(data));
       } else if (name === "final") {
         terminalSeen = true;
         setState("DONE");
+        setPhase("DONE");
+        clearTool();
+        setRunning(false);
         appendLine("done", "DONE  " + eventMessage(data));
       } else if (name === "error") {
         terminalSeen = true;
         setState("ERROR");
+        setPhaseError();
+        clearTool();
+        setRunning(false);
         appendLine("error", "ERROR  " + eventMessage(data));
       }
     }
@@ -448,6 +573,7 @@
         }
         ui.session.textContent = shortSession(sessionId);
         setState("IDLE");
+        setPhase(null);
         setConnection("会话已创建");
         appendLine("done", "New session: " + shortSession(sessionId));
       } catch (error) {

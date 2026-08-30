@@ -1,3 +1,4 @@
+import re
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -101,6 +102,101 @@ def test_static_html_contains_the_thin_http_sse_client() -> None:
         "event instanceof MessageEvent",
     ):
         assert marker in html
+
+
+def test_static_html_maps_existing_events_to_agent_phase_graph() -> None:
+    html = load_static_html()
+
+    for phase in ("THINK", "ACT", "OBSERVE", "COMPACT", "DONE"):
+        assert f'data-phase="{phase}"' in html
+    assert html.count('class="phase-node" data-phase=') == 5
+    assert 'data-phase="CONFIRM"' not in html
+
+    mappings = (
+        ("turn_start", "THINK"),
+        ("tool_request", "ACT"),
+        ("tool_confirm", "ACT"),
+        ("tool_result", "OBSERVE"),
+        ("context_compact", "COMPACT"),
+        ("context_summary", "COMPACT"),
+        ("final", "DONE"),
+    )
+    for event_name, phase in mappings:
+        pattern = (
+            rf'name === "{event_name}".*?'
+            rf'setPhase\("{phase}"\)'
+        )
+        assert re.search(pattern, html, re.DOTALL)
+
+    error_branch = re.search(
+        r'} else if \(name === "error"\) \{(?P<body>.*?)\n      \}\n    \}',
+        html,
+        re.DOTALL,
+    )
+    assert error_branch is not None
+    assert "setPhaseError();" in error_branch.group("body")
+    assert 'setPhase("DONE")' not in error_branch.group("body")
+
+
+def test_static_html_keeps_desktop_layout_inside_viewport() -> None:
+    html = load_static_html()
+
+    for rule in (
+        "min-height: 100dvh;",
+        "overflow: hidden;",
+        "height: calc(100dvh - 32px);",
+        "grid-template-rows: auto minmax(0, 1fr) auto;",
+        "main > section.panel { display: flex; flex-direction: column; }",
+        "#events {",
+        "height: 100%;",
+        "flex: 1;",
+        "overflow-y: auto;",
+    ):
+        assert rule in html
+
+    mobile = html.split("@media (max-width: 780px)", 1)[1]
+    assert "body { min-height: 100dvh; overflow: auto; }" in mobile
+    assert ".shell { height: auto;" in mobile
+
+
+def test_static_html_hides_permission_and_abort_outside_active_work() -> None:
+    html = load_static_html()
+
+    assert '#permission { display: none;' in html
+    assert '#abort { display: none; }' in html
+    assert 'ui.permission.style.display = "block";' in html
+    assert 'function hidePermission()' in html
+    assert 'ui.permission.style.display = "none";' in html
+    assert 'ui.abort.style.display = value ? "block" : "none";' in html
+
+    assert re.search(
+        r'name === "tool_result".*?hidePermission\(\).*?'
+        r'name === "context_compact"',
+        html,
+        re.DOTALL,
+    )
+    assert re.search(
+        r'name === "final".*?clearTool\(\).*?setRunning\(false\).*?'
+        r'name === "error"',
+        html,
+        re.DOTALL,
+    )
+    assert re.search(
+        r'name === "error".*?clearTool\(\).*?setRunning\(false\).*?'
+        r'\n      \}\n    \}',
+        html,
+        re.DOTALL,
+    )
+    assert re.search(
+        r'async function createSession\(clearLog\).*?clearTool\(\)',
+        html,
+        re.DOTALL,
+    )
+
+    assert "resolvePermission(false)" in html
+    assert "resolvePermission(true)" in html
+    assert "error.status === 409" in html
+    assert "该权限已由其他客户端处理" in html
 
 
 def test_static_html_uses_safe_text_rendering_and_no_external_frontend() -> None:
