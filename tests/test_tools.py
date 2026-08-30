@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from ke.safety.sandbox import WorkspaceSandbox
 from ke.tools import edit_file, grep, list_dir, read_file, write_file
 
@@ -90,6 +92,57 @@ def test_list_dir_respects_depth_and_lists_nested_entries(tmp_path: Path) -> Non
     assert "pkg/top.py" in depth_two.content
     assert "pkg/deep/" in depth_two.content
     assert "pkg/deep/hidden.py" not in depth_two.content
+
+
+@pytest.mark.parametrize("error_type", [PermissionError, OSError])
+def test_list_dir_skips_unreadable_child_and_keeps_other_entries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error_type: type[OSError],
+) -> None:
+    sandbox = WorkspaceSandbox(tmp_path)
+    readable = tmp_path / "readable"
+    blocked = tmp_path / "blocked"
+    readable.mkdir()
+    blocked.mkdir()
+    (readable / "visible.txt").write_text("ok", encoding="utf-8")
+    (blocked / "hidden.txt").write_text("hidden", encoding="utf-8")
+    original_iterdir = Path.iterdir
+
+    def guarded_iterdir(directory: Path):
+        if directory == blocked:
+            raise error_type("denied")
+        return original_iterdir(directory)
+
+    monkeypatch.setattr(Path, "iterdir", guarded_iterdir)
+
+    result = list_dir(sandbox, max_depth=3)
+
+    assert not result.is_error
+    assert "blocked/" in result.content
+    assert "blocked/hidden.txt" not in result.content
+    assert "readable/" in result.content
+    assert "readable/visible.txt" in result.content
+
+
+def test_list_dir_root_read_error_still_returns_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = WorkspaceSandbox(tmp_path)
+    original_iterdir = Path.iterdir
+
+    def guarded_iterdir(directory: Path):
+        if directory == tmp_path:
+            raise PermissionError("root denied")
+        return original_iterdir(directory)
+
+    monkeypatch.setattr(Path, "iterdir", guarded_iterdir)
+
+    result = list_dir(sandbox)
+
+    assert result.is_error
+    assert "PermissionError" in result.content
 
 
 def test_grep_finds_lines_and_skips_sensitive_env(tmp_path: Path) -> None:

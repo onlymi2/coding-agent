@@ -125,7 +125,10 @@ def list_dir(
                 if item.is_dir():
                     entries.append(display + "/")
                     if depth < max_depth:
-                        visit(item, depth + 1)
+                        try:
+                            visit(item, depth + 1)
+                        except OSError:
+                            continue
                 else:
                     entries.append(display)
 
