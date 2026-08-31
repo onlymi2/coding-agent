@@ -7,7 +7,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from textual.widgets import Button, Input
+from rich.style import Style
+from rich.text import Text
+from textual.containers import VerticalScroll
+from textual.geometry import Region
+from textual.widgets import Button, Input, Static
 
 from ke.client.http import HttpClientError, SseEvent
 from ke.client.tui import KeTuiApp, PermissionModal, run_tui
@@ -188,7 +192,8 @@ def test_tui_layout_and_server_events_render_safely(tmp_path: Path) -> None:
             await wait_until(pilot, lambda: not app.task_running, "final")
 
             rendered = "\n".join(app.event_lines)
-            assert f"WEB {web_url}" in rendered
+            assert "WEB  Open Web UI  [session-]" in rendered
+            assert web_url not in rendered
             assert client.sent == [("session-1", "build file")]
             assert "THINK turn 1" in rendered
             assert "ACT write_file a.py" in rendered
@@ -298,6 +303,114 @@ def test_permission_modal_is_deny_by_default_and_resolves(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("size", [(80, 30), (60, 30), (50, 30), (40, 30)])
+def test_tui_wraps_long_event_text_and_permission_fits_narrow_screens(
+    size: tuple[int, int],
+    tmp_path: Path,
+) -> None:
+    long_url = "http://127.0.0.1:40000/?session=" + "a" * 160
+    long_preview = "python -m pytest " + "very-long-path\\" * 20
+    app = KeTuiApp(
+        make_config(tmp_path),
+        FakeHttpClient(),
+        "session-1",
+        web_url=long_url,
+    )
+
+    async def scenario() -> None:
+        async with app.run_test(size=size) as pilot:
+            app._write("OBS " + "C:\\workspace\\" + "long-segment-" * 30)
+            await pilot.pause()
+            event_log = app.query_one("#event-log", VerticalScroll)
+            event_content = app.query_one("#event-log-content", Static)
+            assert event_log.max_scroll_x == 0
+            assert not event_log.show_horizontal_scrollbar
+            assert event_log.virtual_size.width <= event_log.container_size.width
+            assert event_content.region.width <= event_log.container_size.width
+            assert event_content.region.height > len(app.event_lines)
+
+            app.push_screen(PermissionModal("bash", long_preview))
+            await pilot.pause()
+            assert isinstance(app.screen, PermissionModal)
+            dialog = app.screen.query_one("#permission-dialog")
+            deny = app.screen.query_one("#deny", Button)
+            allow = app.screen.query_one("#allow", Button)
+            assert dialog.region.x >= 0
+            assert dialog.region.y >= 0
+            assert dialog.region.right <= size[0]
+            assert dialog.region.bottom <= size[1]
+            assert dialog.max_scroll_x == 0
+            assert deny.region.width > 0
+            assert allow.region.width > 0
+            assert dialog.region.contains_region(deny.region)
+            assert dialog.region.contains_region(allow.region)
+
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, PermissionModal)
+
+    asyncio.run(scenario())
+
+
+def test_tui_event_log_reflows_complete_history_when_terminal_resizes(
+    tmp_path: Path,
+) -> None:
+    long_line = (
+        "DONE 已修复 `shipping.py` 中的 bug. "
+        "**修改内容：** 将 "
+        "`if order_total > FREE_SHIPPING_THRESHOLD:` 改为 "
+        "`if order_total >= FREE_SHIPPING_THRESHOLD:`，"
+        "使订单金额恰好100元时免邮。 "
+        "Workspace: D:\\A_codes\\coding-agent-nju\\examples\\demo\\video_bug "
+        "WEB http://127.0.0.1:61122/?session=" + "864a8" * 16
+    )
+    app = KeTuiApp(make_config(tmp_path), FakeHttpClient(), "session-1")
+
+    def rendered_text(widget: Static) -> str:
+        lines = widget.render_lines(
+            Region(0, 0, widget.size.width, widget.size.height)
+        )
+        return "".join(line.text.rstrip() for line in lines)
+
+    def without_layout_whitespace(value: str) -> str:
+        return "".join(value.split())
+
+    async def scenario() -> None:
+        async with app.run_test(size=(80, 30)) as pilot:
+            app._write(long_line)
+            await pilot.pause()
+            event_log = app.query_one("#event-log", VerticalScroll)
+            event_content = app.query_one("#event-log-content", Static)
+            wide_height = event_content.region.height
+            assert app.event_lines == [long_line]
+            assert without_layout_whitespace(rendered_text(event_content)) == (
+                without_layout_whitespace(long_line)
+            )
+
+            await pilot.resize_terminal(50, 30)
+            await pilot.pause()
+            narrow_height = event_content.region.height
+            assert narrow_height > wide_height
+            assert app.event_lines == [long_line]
+            assert without_layout_whitespace(rendered_text(event_content)) == (
+                without_layout_whitespace(long_line)
+            )
+            assert event_log.max_scroll_x == 0
+            assert not event_log.show_horizontal_scrollbar
+            assert event_log.virtual_size.width <= event_log.container_size.width
+
+            await pilot.resize_terminal(80, 30)
+            await pilot.pause()
+            assert event_content.region.height < narrow_height
+            assert event_content.region.height == wide_height
+            assert app.event_lines == [long_line]
+            assert without_layout_whitespace(rendered_text(event_content)) == (
+                without_layout_whitespace(long_line)
+            )
+
+    asyncio.run(scenario())
+
+
 def test_help_channel_new_and_generation_guard(tmp_path: Path) -> None:
     client = FakeHttpClient(sessions=["session-2"])
     app = KeTuiApp(
@@ -331,7 +444,15 @@ def test_help_channel_new_and_generation_guard(tmp_path: Path) -> None:
                 assert channel in rendered
             assert "test-key-must-not-render" not in rendered
             assert "已创建新会话" in rendered
-            assert f"WEB {app.web_url}" in rendered
+            assert "WEB  Open Web UI  [session-]" in rendered
+            assert app.web_url not in rendered
+            new_session_link = app._event_renderables[-1]
+            new_session_targets = [
+                span.style.link
+                for span in new_session_link.spans
+                if isinstance(span.style, Style) and span.style.link is not None
+            ]
+            assert new_session_targets == [app.web_url]
 
             before = list(app.event_lines)
             app._receive_event(
@@ -340,6 +461,45 @@ def test_help_channel_new_and_generation_guard(tmp_path: Path) -> None:
                 0,
             )
             assert app.event_lines == before
+
+    asyncio.run(scenario())
+
+
+def test_web_link_renderable_targets_complete_session_url_in_narrow_tui(
+    tmp_path: Path,
+) -> None:
+    session_id = "66fcc7fb-1234-5678-90ab-1234567890ab"
+    web_url = f"http://127.0.0.1:61122/?session={session_id}"
+    app = KeTuiApp(
+        make_config(tmp_path),
+        FakeHttpClient(),
+        session_id,
+        web_url=web_url,
+    )
+
+    async def scenario() -> None:
+        async with app.run_test(size=(40, 30)) as pilot:
+            await pilot.pause()
+            row = app._event_renderables[0]
+            assert isinstance(row, Text)
+            assert row.plain == "WEB  Open Web UI  [66fcc7fb]"
+            assert web_url not in row.plain
+            links = [
+                span.style.link
+                for span in row.spans
+                if isinstance(span.style, Style) and span.style.link is not None
+            ]
+            assert links == [web_url]
+
+            await submit(app, pilot, "/help")
+            help_link = app._event_renderables[-1]
+            assert isinstance(help_link, Text)
+            help_links = [
+                span.style.link
+                for span in help_link.spans
+                if isinstance(span.style, Style) and span.style.link is not None
+            ]
+            assert help_links == [web_url]
 
     asyncio.run(scenario())
 
@@ -451,6 +611,67 @@ def test_quit_only_requests_textual_exit_and_ctrl_c_uses_same_action(
         binding.key == "ctrl+c" and binding.action == "safe_quit"
         for binding in app.BINDINGS
     )
+
+
+@pytest.mark.parametrize("surface", ["input", "permission"])
+def test_ctrl_c_key_dispatch_reaches_safe_quit_from_focused_surfaces(
+    surface: str,
+    tmp_path: Path,
+) -> None:
+    class QuitProbeApp(KeTuiApp):
+        def __init__(self) -> None:
+            super().__init__(
+                make_config(tmp_path),
+                FakeHttpClient(),
+                "session-1",
+            )
+            self.quit_hits = 0
+
+        def action_safe_quit(self) -> None:
+            self.quit_hits += 1
+
+    app = QuitProbeApp()
+
+    async def scenario() -> None:
+        async with app.run_test() as pilot:
+            if surface == "input":
+                assert app.query_one("#task-input", Input).has_focus
+            else:
+                app.push_screen(PermissionModal("bash", "pytest -q"))
+                await pilot.pause()
+                assert isinstance(app.screen, PermissionModal)
+
+            await pilot.press("ctrl+c")
+            await pilot.pause()
+
+            assert app.quit_hits == 1
+            if surface == "permission":
+                assert isinstance(app.screen, PermissionModal)
+
+    asyncio.run(scenario())
+
+
+def test_quit_command_dispatches_to_same_safe_quit_action(tmp_path: Path) -> None:
+    class QuitProbeApp(KeTuiApp):
+        def __init__(self) -> None:
+            super().__init__(
+                make_config(tmp_path),
+                FakeHttpClient(),
+                "session-1",
+            )
+            self.quit_hits = 0
+
+        def action_safe_quit(self) -> None:
+            self.quit_hits += 1
+
+    app = QuitProbeApp()
+
+    async def scenario() -> None:
+        async with app.run_test() as pilot:
+            await submit(app, pilot, "/quit")
+            assert app.quit_hits == 1
+
+    asyncio.run(scenario())
 
 
 def test_late_permission_callback_does_not_regress_observe_status(

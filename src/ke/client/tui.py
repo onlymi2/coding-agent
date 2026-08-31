@@ -3,12 +3,14 @@ from collections.abc import Callable, Iterator
 from typing import Any, Protocol
 from urllib.parse import urlencode
 
+from rich.style import Style
+from rich.text import Text
 from starlette.applications import Starlette
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Footer, Input, RichLog, Static
+from textual.widgets import Button, Footer, Input, Static
 
 from ke.client.http import HttpClientError, KeHttpClient, SseEvent
 from ke.client.run import ServerLike, safe_tool_summary
@@ -59,18 +61,31 @@ class PermissionModal(ModalScreen[bool]):
         align: center middle;
     }
     #permission-dialog {
-        width: 64;
+        width: 90%;
+        max-width: 64;
         height: auto;
+        max-height: 90%;
         padding: 1 2;
         border: round $accent;
         background: $surface;
+        overflow-x: hidden;
+        overflow-y: auto;
+    }
+    #permission-preview {
+        width: 100%;
+        height: auto;
+        text-wrap: wrap;
+        overflow-x: hidden;
     }
     #permission-buttons {
+        width: 100%;
         height: auto;
         align-horizontal: right;
         margin-top: 1;
     }
     #permission-buttons Button {
+        width: 1fr;
+        min-width: 8;
         margin-left: 1;
     }
     """
@@ -81,10 +96,14 @@ class PermissionModal(ModalScreen[bool]):
         self.preview = preview[:200]
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="permission-dialog"):
+        with VerticalScroll(id="permission-dialog"):
             yield Static("确认执行本地工具", markup=False)
             yield Static(f"工具：{self.tool_name}", markup=False)
-            yield Static(f"预览：{self.preview}", markup=False)
+            yield Static(
+                f"预览：{self.preview}",
+                id="permission-preview",
+                markup=False,
+            )
             with Horizontal(id="permission-buttons"):
                 yield Button("Deny", id="deny", variant="error")
                 yield Button("Allow", id="allow", variant="success")
@@ -117,6 +136,14 @@ class KeTuiApp(App[int]):
         height: 1fr;
         border: round $accent;
         padding: 0 1;
+        overflow-x: hidden;
+        overflow-y: scroll;
+    }
+    #event-log-content {
+        width: 100%;
+        height: auto;
+        text-wrap: wrap;
+        text-overflow: fold;
     }
     #task-input {
         dock: bottom;
@@ -150,6 +177,7 @@ class KeTuiApp(App[int]):
         self.status_history = ["IDLE"]
         self.task_running = False
         self.event_lines: list[str] = []
+        self._event_renderables: list[Text] = []
         self._generation = 0
         self._creating_session = False
         self._pending_permission_id: str | None = None
@@ -157,7 +185,13 @@ class KeTuiApp(App[int]):
 
     def compose(self) -> ComposeResult:
         yield Static(self._status_text(), id="status-bar", markup=False)
-        yield RichLog(id="event-log", wrap=True, markup=False, highlight=False)
+        with VerticalScroll(id="event-log"):
+            yield Static(
+                "",
+                id="event-log-content",
+                markup=False,
+                expand=True,
+            )
         yield Input(
             placeholder="输入任务，/help 查看命令",
             id="task-input",
@@ -166,7 +200,7 @@ class KeTuiApp(App[int]):
 
     def on_mount(self) -> None:
         if self.web_url is not None:
-            self._write(f"WEB {self.web_url}")
+            self._write_web_link()
         self.query_one("#task-input", Input).focus()
 
     def _status_text(self) -> str:
@@ -181,8 +215,33 @@ class KeTuiApp(App[int]):
         self.query_one("#status-bar", Static).update(self._status_text())
 
     def _write(self, line: str) -> None:
-        self.event_lines.append(line)
-        self.query_one("#event-log", RichLog).write(line)
+        self._append_event_renderable(Text(line))
+
+    def _write_web_link(self) -> None:
+        if self.web_url is None:
+            return
+        row = Text("WEB  ")
+        row.append(
+            "Open Web UI",
+            style=Style(link=self.web_url, underline=True),
+        )
+        row.append(f"  [{self.session_id[:8]}]")
+        self._append_event_renderable(row)
+
+    def _append_event_renderable(self, row: Text) -> None:
+        self.event_lines.append(row.plain)
+        self._event_renderables.append(row)
+        content = Text()
+        for index, renderable in enumerate(self._event_renderables):
+            if index:
+                content.append("\n")
+            content.append(renderable)
+        self.query_one("#event-log-content", Static).update(content)
+        self.query_one("#event-log", VerticalScroll).scroll_end(
+            animate=False,
+            immediate=False,
+            x_axis=False,
+        )
 
     def _set_input_enabled(self, enabled: bool) -> None:
         task_input = self.query_one("#task-input", Input)
@@ -470,7 +529,7 @@ class KeTuiApp(App[int]):
             for line in HELP_LINES:
                 self._write(line)
             if self.web_url is not None:
-                self._write(f"WEB {self.web_url}")
+                self._write_web_link()
         elif command == "/channel":
             names = sorted(set(self.config.channels) | {self.config.channel})
             for name in names:
@@ -556,7 +615,7 @@ class KeTuiApp(App[int]):
         self._set_status("IDLE")
         self._write("已创建新会话")
         if self.web_url is not None:
-            self._write(f"WEB {self.web_url}")
+            self._write_web_link()
         self._set_input_enabled(True)
 
     def _new_session_failed(self, generation: int, error_type: str) -> None:
