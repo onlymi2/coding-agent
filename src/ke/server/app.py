@@ -1,7 +1,8 @@
 import json
 import threading
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from importlib.resources import files
 from typing import Any
@@ -87,6 +88,7 @@ class EventHistory:
     def __init__(self) -> None:
         self._condition = threading.Condition()
         self._events: list[StoredEvent] = []
+        self._closed = False
 
     def publish(self, event: AgentEvent) -> StoredEvent:
         with self._condition:
@@ -106,15 +108,24 @@ class EventHistory:
     def wait_after(
         self,
         after_id: int,
-        finished: Callable[[], bool],
         timeout: float = 15.0,
     ) -> list[StoredEvent]:
         with self._condition:
             self._condition.wait_for(
-                lambda: len(self._events) > after_id or finished(),
+                lambda: len(self._events) > after_id or self._closed,
                 timeout=timeout,
             )
             return list(self._events[max(0, after_id) :])
+
+    @property
+    def closed(self) -> bool:
+        with self._condition:
+            return self._closed
+
+    def close(self) -> None:
+        with self._condition:
+            self._closed = True
+            self._condition.notify_all()
 
     def wake(self) -> None:
         with self._condition:
@@ -235,8 +246,12 @@ class SessionRuntime:
         self.workspace = WorkspaceSandbox(config.workspace).workspace
         self._lock = threading.Lock()
         self._sessions: dict[str, AgentSession] = {}
+        self._closing = False
 
     def create_session(self) -> AgentSession:
+        with self._lock:
+            if self._closing:
+                raise RuntimeError("runtime正在关闭")
         sandbox = WorkspaceSandbox(self.workspace)
         registry = (
             self.registry_factory(sandbox)
@@ -269,12 +284,27 @@ class SessionRuntime:
             permissions=PermissionGate(auto_approve=self.auto_approve),
         )
         with self._lock:
+            if self._closing:
+                session.events.close()
+                raise RuntimeError("runtime正在关闭")
             self._sessions[session.id] = session
         return session
 
     def get(self, session_id: str) -> AgentSession | None:
         with self._lock:
             return self._sessions.get(session_id)
+
+    def shutdown(self) -> None:
+        """Stop active work and wake every session-level SSE subscriber."""
+
+        with self._lock:
+            if self._closing:
+                return
+            self._closing = True
+            sessions = list(self._sessions.values())
+        for session in sessions:
+            session.abort()
+            session.events.close()
 
 
 def _error(message: str, status_code: int) -> JSONResponse:
@@ -297,14 +327,11 @@ def _sse_frame(event: StoredEvent) -> str:
 def _event_stream(session: AgentSession, after_id: int) -> Iterator[str]:
     cursor = max(0, after_id)
     while True:
-        pending = session.events.wait_after(
-            cursor,
-            finished=lambda: not session.running,
-        )
+        pending = session.events.wait_after(cursor)
         for event in pending:
             yield _sse_frame(event)
             cursor = event.event_id
-        if not session.running and not session.events.snapshot(cursor):
+        if session.events.closed:
             return
         if not pending:
             yield ": keep-alive\n\n"
@@ -327,6 +354,13 @@ def create_app(
         registry_factory,
         auto_approve,
     )
+
+    @asynccontextmanager
+    async def lifespan(app: Starlette) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            runtime.shutdown()
 
     async def health(request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok"})
@@ -410,7 +444,8 @@ def create_app(
                 methods=["POST"],
             ),
             Route("/session/{id}/abort", abort, methods=["POST"]),
-        ]
+        ],
+        lifespan=lifespan,
     )
     app.state.runtime = runtime
     return app

@@ -127,6 +127,10 @@ class EmbeddedServer:
     def stop(self) -> None:
         server = self._server
         thread = self._thread
+        runtime = getattr(getattr(self.app, "state", None), "runtime", None)
+        shutdown = getattr(runtime, "shutdown", None)
+        if callable(shutdown):
+            shutdown()
         if server is not None:
             server.should_exit = True
         if thread is not None and thread.is_alive():

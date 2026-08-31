@@ -1,7 +1,7 @@
 import json
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 from starlette.testclient import TestClient
@@ -10,7 +10,7 @@ from ke.config import KeConfig
 from ke.llm.fake_llm import FakeLLM
 from ke.llm.protocol import ToolSchema
 from ke.llm.types import LLMResponse, Message, ToolCall
-from ke.server.app import AgentSession, StoredEvent, create_app
+from ke.server.app import AgentSession, StoredEvent, _event_stream, create_app
 
 
 def text_response(content: str) -> LLMResponse:
@@ -65,7 +65,7 @@ def wait_for_event(
             if event.event_type == event_type:
                 return event
         cursor = len(events)
-        session.events.wait_after(cursor, finished=lambda: False, timeout=0.05)
+        session.events.wait_after(cursor, timeout=0.05)
     raise AssertionError(f"timed out waiting for event {event_type}")
 
 
@@ -86,6 +86,27 @@ def parse_sse(text: str) -> list[dict[str, object]]:
             }
         )
     return parsed
+
+
+def consume_sse(
+    stream: Iterator[str],
+    collected: list[dict[str, object]],
+    *,
+    terminal_count: int,
+    done: threading.Event,
+    first_terminal: threading.Event | None = None,
+) -> None:
+    terminals = 0
+    for frame in stream:
+        for event in parse_sse(frame):
+            collected.append(event)
+            if event["event"] in {"final", "error"}:
+                terminals += 1
+                if terminals == 1 and first_terminal is not None:
+                    first_terminal.set()
+                if terminals >= terminal_count:
+                    done.set()
+                    return
 
 
 class BlockingLLM:
@@ -207,7 +228,53 @@ def test_message_validation_and_running_resets_after_final(tmp_path: Path) -> No
         assert not session.running
 
 
-def test_sse_replays_valid_events_to_multiple_subscribers(tmp_path: Path) -> None:
+def test_idle_sse_subscriber_waits_for_later_task(tmp_path: Path) -> None:
+    app = create_app(
+        make_config(tmp_path),
+        llm_factory=lambda: FakeLLM([text_response("done")]),
+    )
+    with TestClient(app) as client:
+        session_id = create_session(client)
+        session = session_for(app, session_id)
+        entered_wait = threading.Event()
+        original_wait = session.events.wait_after
+
+        def observed_wait(after_id: int, timeout: float = 15.0) -> list[StoredEvent]:
+            entered_wait.set()
+            return original_wait(after_id, timeout=timeout)
+
+        session.events.wait_after = observed_wait  # type: ignore[method-assign]
+        stream = _event_stream(session, 0)
+        collected: list[dict[str, object]] = []
+        done = threading.Event()
+        subscriber = threading.Thread(
+            target=consume_sse,
+            args=(stream, collected),
+            kwargs={"terminal_count": 1, "done": done},
+            daemon=True,
+        )
+        subscriber.start()
+
+        assert entered_wait.wait(timeout=1)
+        assert not done.wait(timeout=0.05)
+        assert subscriber.is_alive()
+        assert client.post(
+            f"/session/{session_id}/message",
+            json={"content": "start after attach"},
+        ).status_code == 202
+        assert done.wait(timeout=3)
+        assert session.wait_until_idle()
+
+        stream.close()
+        subscriber.join(timeout=1)
+        assert not subscriber.is_alive()
+        assert [event["event"] for event in collected] == [
+            "turn_start",
+            "final",
+        ]
+
+
+def test_sse_broadcasts_same_task_to_two_idle_subscribers(tmp_path: Path) -> None:
     app = create_app(
         make_config(tmp_path),
         llm_factory=lambda: FakeLLM(
@@ -219,22 +286,35 @@ def test_sse_replays_valid_events_to_multiple_subscribers(tmp_path: Path) -> Non
     )
     with TestClient(app) as client:
         session_id = create_session(client)
+        session = session_for(app, session_id)
+        streams = [_event_stream(session, 0), _event_stream(session, 0)]
+        collected: list[list[dict[str, object]]] = [[], []]
+        done = [threading.Event(), threading.Event()]
+        subscribers = [
+            threading.Thread(
+                target=consume_sse,
+                args=(streams[index], collected[index]),
+                kwargs={"terminal_count": 1, "done": done[index]},
+                daemon=True,
+            )
+            for index in range(2)
+        ]
+        for subscriber in subscribers:
+            subscriber.start()
+
         assert client.post(
             f"/session/{session_id}/message",
             json={"content": "list files"},
         ).status_code == 202
-        session = session_for(app, session_id)
+        assert all(signal.wait(timeout=3) for signal in done)
         assert session.wait_until_idle()
+        for stream in streams:
+            stream.close()
+        for subscriber in subscribers:
+            subscriber.join(timeout=1)
+            assert not subscriber.is_alive()
 
-        first_response = client.get(f"/session/{session_id}/events")
-        second_response = client.get(f"/session/{session_id}/events")
-
-        assert first_response.status_code == 200
-        assert first_response.headers["content-type"].startswith(
-            "text/event-stream"
-        )
-        first = parse_sse(first_response.text)
-        second = parse_sse(second_response.text)
+        first, second = collected
         assert [event["event"] for event in first] == [
             "turn_start",
             "tool_request",
@@ -265,11 +345,90 @@ def test_sse_replays_valid_events_to_multiple_subscribers(tmp_path: Path) -> Non
         assert tool_result["data"]["tool_result"]["is_error"] is False
         assert isinstance(first[-1]["data"], dict)
 
-        resumed_response = client.get(
-            f"/session/{session_id}/events",
-            headers={"Last-Event-ID": "3"},
+
+def test_sse_observer_continues_across_two_tasks_in_one_session(
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        make_config(tmp_path),
+        llm_factory=lambda: FakeLLM(
+            [text_response("task A done"), text_response("task B done")]
+        ),
+    )
+    with TestClient(app) as client:
+        session_id = create_session(client)
+        session = session_for(app, session_id)
+        stream = _event_stream(session, 0)
+        collected: list[dict[str, object]] = []
+        first_terminal = threading.Event()
+        done = threading.Event()
+        subscriber = threading.Thread(
+            target=consume_sse,
+            args=(stream, collected),
+            kwargs={
+                "terminal_count": 2,
+                "done": done,
+                "first_terminal": first_terminal,
+            },
+            daemon=True,
         )
-        resumed = parse_sse(resumed_response.text)
+        subscriber.start()
+
+        assert client.post(
+            f"/session/{session_id}/message",
+            json={"content": "task A"},
+        ).status_code == 202
+        assert first_terminal.wait(timeout=3)
+        assert session.wait_until_idle()
+        assert subscriber.is_alive()
+
+        assert client.post(
+            f"/session/{session_id}/message",
+            json={"content": "task B"},
+        ).status_code == 202
+        assert done.wait(timeout=3)
+        assert session.wait_until_idle()
+
+        stream.close()
+        subscriber.join(timeout=1)
+        assert not subscriber.is_alive()
+        assert [event["event"] for event in collected] == [
+            "turn_start",
+            "final",
+            "turn_start",
+            "final",
+        ]
+        assert [event["id"] for event in collected] == [1, 2, 3, 4]
+        assert collected[1]["data"]["message"] == "task A done"
+        assert collected[3]["data"]["message"] == "task B done"
+
+
+def test_sse_replays_events_after_cursor(tmp_path: Path) -> None:
+    app = create_app(
+        make_config(tmp_path),
+        llm_factory=lambda: FakeLLM(
+            [
+                tool_response(ToolCall("list", "list_dir", {"path": "."})),
+                text_response("done"),
+            ]
+        ),
+    )
+    with TestClient(app) as client:
+        session_id = create_session(client)
+        session = session_for(app, session_id)
+        assert client.post(
+            f"/session/{session_id}/message",
+            json={"content": "list files"},
+        ).status_code == 202
+        assert session.wait_until_idle()
+
+        stream = _event_stream(session, 3)
+        resumed: list[dict[str, object]] = []
+        done = threading.Event()
+        consume_sse(stream, resumed, terminal_count=1, done=done)
+        stream.close()
+
+        assert done.is_set()
         assert [event["id"] for event in resumed] == [4, 5]
 
 
@@ -283,10 +442,14 @@ def test_server_does_not_expose_llm_exception_details(tmp_path: Path) -> None:
         ).status_code == 202
         assert session.wait_until_idle()
 
-        response = client.get(f"/session/{session_id}/events")
-        assert response.status_code == 200
-        assert "sdk-secret-detail" not in response.text
-        events = parse_sse(response.text)
+        stream = _event_stream(session, 0)
+        events: list[dict[str, object]] = []
+        done = threading.Event()
+        consume_sse(stream, events, terminal_count=1, done=done)
+        stream.close()
+
+        serialized = json.dumps(events, ensure_ascii=False)
+        assert "sdk-secret-detail" not in serialized
         assert events[-1]["event"] == "error"
         assert events[-1]["data"]["message"] == "LLM 调用失败"
 

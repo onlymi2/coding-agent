@@ -1,11 +1,16 @@
 import threading
+import time
 from types import SimpleNamespace
 from pathlib import Path
 
+import httpx
 import pytest
 
 import ke.server.runtime as runtime_module
 from ke.config import KeConfig
+from ke.llm.fake_llm import FakeLLM
+from ke.llm.types import LLMResponse, Message
+from ke.server.app import create_app
 from ke.server.runtime import EmbeddedServerError
 
 
@@ -260,3 +265,93 @@ def test_embedded_stop_closes_socket_then_gives_thread_final_join(
     assert listener.closed.is_set()
     assert embedded._thread is not None
     assert not embedded._thread.is_alive()
+
+
+@pytest.mark.parametrize("after_first_task", [False, True])
+def test_embedded_stop_closes_idle_session_sse_subscriber(
+    after_first_task: bool,
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        make_config(tmp_path),
+        llm_factory=lambda: FakeLLM(
+            [
+                LLMResponse(
+                    Message(role="assistant", content="done"),
+                    finish_reason="stop",
+                )
+            ]
+        ),
+    )
+    embedded = runtime_module.EmbeddedServer(
+        app,
+        startup_timeout=3,
+        shutdown_timeout=3,
+    )
+    client: httpx.Client | None = None
+    subscriber: threading.Thread | None = None
+    connected = threading.Event()
+    stopped = threading.Event()
+    events: list[str] = []
+    errors: list[str] = []
+
+    try:
+        embedded.start()
+        client = httpx.Client(
+            base_url=embedded.base_url,
+            timeout=3,
+            trust_env=False,
+        )
+        response = client.post("/session")
+        assert response.status_code == 201
+        session_id = response.json()["id"]
+
+        def observe() -> None:
+            try:
+                with httpx.Client(
+                    base_url=embedded.base_url,
+                    timeout=None,
+                    trust_env=False,
+                ) as observer:
+                    with observer.stream(
+                        "GET", f"/session/{session_id}/events"
+                    ) as stream:
+                        assert stream.status_code == 200
+                        connected.set()
+                        for line in stream.iter_lines():
+                            if line.startswith("event: "):
+                                events.append(line.removeprefix("event: "))
+            except Exception as exc:  # pragma: no cover - assertion below
+                errors.append(type(exc).__name__)
+            finally:
+                stopped.set()
+
+        subscriber = threading.Thread(target=observe, daemon=True)
+        subscriber.start()
+        assert connected.wait(timeout=2)
+        assert subscriber.is_alive()
+
+        if after_first_task:
+            response = client.post(
+                f"/session/{session_id}/message",
+                json={"content": "task A"},
+            )
+            assert response.status_code == 202
+            deadline = time.monotonic() + 3
+            while "final" not in events and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert "final" in events
+            assert subscriber.is_alive()
+
+        embedded.stop()
+        assert stopped.wait(timeout=2)
+        subscriber.join(timeout=1)
+        assert not subscriber.is_alive()
+        assert errors == []
+    finally:
+        if client is not None:
+            client.close()
+        try:
+            embedded.stop()
+        except EmbeddedServerError:
+            pass

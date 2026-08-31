@@ -533,24 +533,18 @@
         if (source !== current) {
           return;
         }
-        current.close();
-        source = null;
-        if (terminalSeen) {
-          terminalSeen = false;
-          setRunning(false);
-          setConnection("任务已结束");
-        } else if (!opened) {
+        if (!opened) {
+          current.close();
+          source = null;
           setState("ERROR");
           setConnection("SSE连接失败");
           appendLine("error", isAttach ? "ERROR session不存在或无法连接" : "ERROR SSE连接失败");
           setRunning(false);
-        } else if (!running) {
-          setState("IDLE");
-          setConnection("会话空闲");
-          setRunning(false);
-        } else {
+          return;
+        }
+        setConnection("SSE重连中…");
+        if (!terminalSeen && running) {
           setState("ERROR");
-          setConnection("SSE连接中断");
           appendLine("error", "ERROR SSE连接中断，任务状态未知");
         }
       };

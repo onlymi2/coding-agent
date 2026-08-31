@@ -8,7 +8,7 @@ from ke.config import KeConfig
 from ke.llm.fake_llm import FakeLLM
 from ke.llm.protocol import ToolSchema
 from ke.llm.types import LLMResponse, Message, ToolCall
-from ke.server.app import create_app, load_static_html
+from ke.server.app import _event_stream, create_app, load_static_html
 
 
 def make_config(tmp_path: Path) -> KeConfig:
@@ -214,11 +214,25 @@ def test_static_html_uses_safe_text_rendering_and_no_external_frontend() -> None
     assert "terminaltimer" not in lowered
     assert "scheduleterminalclose" not in lowered
     assert "settimeout" not in lowered
-    assert "if (terminalseen)" in lowered
+    assert "if (!terminalseen && running)" in lowered
+    assert 'setconnection("sse重连中…")' in lowered
     assert "function isagentmessageevent(event)" in lowered
     assert "source === current && isagentmessageevent(event)" in lowered
     assert "current.onerror = function (event)" in lowered
     assert "if (isagentmessageevent(event))" in lowered
+    assert re.search(
+        r'if \(!opened\) \{.*?current\.close\(\).*?return;.*?'
+        r'setConnection\("SSE重连中…"\)',
+        html,
+        re.DOTALL,
+    )
+    terminal_branch = re.search(
+        r'name === "final"(?P<body>.*?)name === "error"',
+        html,
+        re.DOTALL,
+    )
+    assert terminal_branch is not None
+    assert "closeEvents()" not in terminal_branch.group("body")
     for framework in (
         "react.production",
         "vue.global",
@@ -256,15 +270,24 @@ def test_same_session_history_is_broadcast_to_two_web_observers(
         assert session is not None
         assert session.wait_until_idle()
 
-        first = client.get(f"/session/{session_id}/events")
-        second = client.get(f"/session/{session_id}/events")
+        def replay() -> str:
+            stream = _event_stream(session, 0)
+            frames: list[str] = []
+            for frame in stream:
+                frames.append(frame)
+                if "event: final\n" in frame:
+                    break
+            stream.close()
+            return "".join(frames)
 
-    assert first.status_code == 200
-    assert first.text == second.text
+        first = replay()
+        second = replay()
+
+    assert first == second
     for event_name in (
         "turn_start",
         "tool_request",
         "tool_result",
         "final",
     ):
-        assert f"event: {event_name}" in first.text
+        assert f"event: {event_name}" in first
