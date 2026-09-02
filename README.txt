@@ -31,11 +31,11 @@ KE：一个可验证、可终止、可观察的本地Coding Agent
 　　启动一次性headless任务，通过内嵌Server执行；--yes用于自动批准文件修改和命令执行。
 
 4、核心设计与特色
-（1）Verification Gate：完成前验证
-　　代码经write_file或edit_file修改后进入待验证状态。若模型在没有新验证证据时请求结束，Runtime会拦截首次完成，要求补充pytest、unittest、compileall等测试或编译验证；确实无法自动验证时，可说明原因后结束。这样将模型的完成声明与真实环境中的验证证据分开处理。
+（1）Verification Gate：一次性完成前验证提醒
+　　代码经write_file或edit_file修改后进入待验证状态。若模型在没有新验证证据时请求结束，Runtime会拦截首次完成并提醒验证；成功执行pytest、unittest或compileall可清除待验证状态。确实无法自动验证时，可说明原因后结束。这样避免模型修改代码后立即宣称完成，同时保留无法自动验证时的退出路径。
 
 （2）Bounded Loop：有界执行
-　　Agent Loop按THINK / ACT / OBSERVE / COMPACT / DONE状态推进，工具成功或失败都会作为Observation回到上下文，使模型基于真实执行结果继续决策。Runtime同时设置最大轮数、连续工具错误、重复相同动作的doom-loop检测和用户abort等终止条件，使错误可以被Agent消化，也保证循环能够有界终止。
+　　Agent运行过程可映射为THINK / ACT / OBSERVE / COMPACT / DONE阶段，工具成功或失败都会作为Observation回到上下文，使模型基于真实执行结果继续决策。Runtime同时设置最大轮数、连续工具错误、重复相同动作的doom-loop检测和用户abort等终止条件，使错误可以被Agent消化，也保证循环能够有界终止。
 
 （3）Workspace Safety：执行边界
 　　所有文件工具路径规范化后必须位于workspace内，并默认拒绝读取.env等敏感文件；write_file、edit_file和bash默认需要人工确认。bash固定在workspace执行，并提供timeout、进程终止、输出截断和API Key环境变量过滤。该机制属于受约束的本地执行，并非操作系统级沙箱。
@@ -49,3 +49,6 @@ KE：一个可验证、可终止、可观察的本地Coding Agent
 
 （2）模型解耦与离线测试
 　　Agent Loop通过LlmClient协议接入OpenAI-compatible模型，可通过配置切换不同模型与网关。核心逻辑使用FakeLLM等本地替身进行离线测试，不依赖真实API Key和外部网络。
+
+（3）实验验证
+　　安装dev依赖后运行python -m pytest -q，实际收集236个测试用例，236/236通过、0 failed、0 skipped；其中Verification Gate相关用例23/23通过。全部测试无需真实LLM、API Key或外部网络。

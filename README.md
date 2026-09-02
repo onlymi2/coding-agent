@@ -10,7 +10,7 @@
 - 多种终止保护：最大轮数、连续工具错误、相同工具与参数的 doom-loop 检测，以及外部 abort。
 - Workspace 路径约束：文件路径规范化后必须位于 workspace 内；默认拒绝读取 `.env` 等敏感环境文件，但允许 `.env.example`。
 - 工具确认门：`read_file`、`list_dir`、`grep` 自动执行；`write_file`、`edit_file`、`bash` 默认需要人工确认。
-- Guarded local command execution：固定 workspace `cwd`、timeout、进程树终止、有界输出以及子进程 API Key 环境变量过滤。
+- Guarded local command execution：固定 workspace `cwd`、timeout、进程树终止、返回输出截断以及子进程 API Key 环境变量过滤。
 - 三级上下文管理：单条工具输出截断、旧工具结果确定性折叠，以及不带工具的 LLM-assisted semantic summary。
 - C/S 架构：Starlette HTTP Server 与 SSE 事件流为 Textual TUI、内置 Web 客户端和 headless `ke run` 提供同一 Runtime。
 - OpenAI-compatible LLM 客户端，通过配置切换兼容渠道，不让 Agent Loop 依赖具体模型厂商 SDK 对象。
@@ -62,7 +62,7 @@ python -m pip install -e ".[dev]"
 
 `ke` 不会自动加载 `.env`，也不依赖 `python-dotenv`。`.env.example` 只是环境变量名称和安全示例模板；`.env` 只能作为本地记录，并必须保持在 `.gitignore` 中。
 
-API Key 只从进程环境变量读取：优先使用 `KE_API_KEY`，也可以使用当前 channel 对应的 `<CHANNEL>_API_KEY`，例如 OpenAI channel 对应 `OPENAI_API_KEY`。不要把密钥写入命令行或 YAML。
+正常 CLI/config loader 路径下，API Key 只从进程环境变量读取：优先使用 `KE_API_KEY`，也可以使用当前 channel 对应的 `<CHANNEL>_API_KEY`，例如 OpenAI channel 对应 `OPENAI_API_KEY`。不要把密钥写入命令行或 YAML。
 
 常用环境变量：
 
@@ -144,6 +144,18 @@ Pop-Location
 ```bash
 python -m pytest -q
 ```
+
+在安装开发依赖的环境中运行上述命令，pytest 实际收集 236 个 test cases，结果为 236 passed、0 failed、0 skipped。全部测试无需真实 LLM、真实 API Key 或外部网络。
+
+| Capability | Related cases | Result |
+| --- | ---: | ---: |
+| Agent Loop | 38 | 38/38 |
+| Verification Gate | 23 | 23/23 |
+| Workspace Safety | 25 | 25/25 |
+| Context Management | 17 | 17/17 |
+| HTTP/SSE Runtime | 41 | 41/41 |
+
+上述分类按能力统计，存在重叠，并非对 236 个测试的互斥划分。
 
 ## 项目结构
 
